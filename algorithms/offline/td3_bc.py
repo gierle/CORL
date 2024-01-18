@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import d4rl
+# import d4rl
 import gym
 import numpy as np
 import pyrallis
@@ -110,7 +110,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -330,7 +332,9 @@ class TD3_BC:
         current_q2 = self.critic_2(state, action)
 
         # Compute critic loss
-        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(
+            current_q2, target_q
+        )
         log_dict["critic_loss"] = critic_loss.item()
         # Optimize the critic
         self.critic_1_optimizer.zero_grad()
@@ -387,128 +391,128 @@ class TD3_BC:
         self.total_it = state_dict["total_it"]
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
-    env = gym.make(config.env)
+# @pyrallis.wrap()
+# def train(config: TrainConfig):
+#     env = gym.make(config.env)
 
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
+#     state_dim = env.observation_space.shape[0]
+#     action_dim = env.action_space.shape[0]
 
-    dataset = d4rl.qlearning_dataset(env)
+#     dataset = d4rl.qlearning_dataset(env)
 
-    if config.normalize_reward:
-        modify_reward(dataset, config.env)
+#     if config.normalize_reward:
+#         modify_reward(dataset, config.env)
 
-    if config.normalize:
-        state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
-    else:
-        state_mean, state_std = 0, 1
+#     if config.normalize:
+#         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
+#     else:
+#         state_mean, state_std = 0, 1
 
-    dataset["observations"] = normalize_states(
-        dataset["observations"], state_mean, state_std
-    )
-    dataset["next_observations"] = normalize_states(
-        dataset["next_observations"], state_mean, state_std
-    )
-    env = wrap_env(env, state_mean=state_mean, state_std=state_std)
-    replay_buffer = ReplayBuffer(
-        state_dim,
-        action_dim,
-        config.buffer_size,
-        config.device,
-    )
-    replay_buffer.load_d4rl_dataset(dataset)
+#     dataset["observations"] = normalize_states(
+#         dataset["observations"], state_mean, state_std
+#     )
+#     dataset["next_observations"] = normalize_states(
+#         dataset["next_observations"], state_mean, state_std
+#     )
+#     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
+#     replay_buffer = ReplayBuffer(
+#         state_dim,
+#         action_dim,
+#         config.buffer_size,
+#         config.device,
+#     )
+#     replay_buffer.load_d4rl_dataset(dataset)
 
-    max_action = float(env.action_space.high[0])
+#     max_action = float(env.action_space.high[0])
 
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
+#     if config.checkpoints_path is not None:
+#         print(f"Checkpoints path: {config.checkpoints_path}")
+#         os.makedirs(config.checkpoints_path, exist_ok=True)
+#         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
+#             pyrallis.dump(config, f)
 
-    # Set seeds
-    seed = config.seed
-    set_seed(seed, env)
+#     # Set seeds
+#     seed = config.seed
+#     set_seed(seed, env)
 
-    actor = Actor(state_dim, action_dim, max_action).to(config.device)
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
+#     actor = Actor(state_dim, action_dim, max_action).to(config.device)
+#     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
 
-    critic_1 = Critic(state_dim, action_dim).to(config.device)
-    critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), lr=3e-4)
-    critic_2 = Critic(state_dim, action_dim).to(config.device)
-    critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), lr=3e-4)
+#     critic_1 = Critic(state_dim, action_dim).to(config.device)
+#     critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), lr=3e-4)
+#     critic_2 = Critic(state_dim, action_dim).to(config.device)
+#     critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), lr=3e-4)
 
-    kwargs = {
-        "max_action": max_action,
-        "actor": actor,
-        "actor_optimizer": actor_optimizer,
-        "critic_1": critic_1,
-        "critic_1_optimizer": critic_1_optimizer,
-        "critic_2": critic_2,
-        "critic_2_optimizer": critic_2_optimizer,
-        "discount": config.discount,
-        "tau": config.tau,
-        "device": config.device,
-        # TD3
-        "policy_noise": config.policy_noise * max_action,
-        "noise_clip": config.noise_clip * max_action,
-        "policy_freq": config.policy_freq,
-        # TD3 + BC
-        "alpha": config.alpha,
-    }
+#     kwargs = {
+#         "max_action": max_action,
+#         "actor": actor,
+#         "actor_optimizer": actor_optimizer,
+#         "critic_1": critic_1,
+#         "critic_1_optimizer": critic_1_optimizer,
+#         "critic_2": critic_2,
+#         "critic_2_optimizer": critic_2_optimizer,
+#         "discount": config.discount,
+#         "tau": config.tau,
+#         "device": config.device,
+#         # TD3
+#         "policy_noise": config.policy_noise * max_action,
+#         "noise_clip": config.noise_clip * max_action,
+#         "policy_freq": config.policy_freq,
+#         # TD3 + BC
+#         "alpha": config.alpha,
+#     }
 
-    print("---------------------------------------")
-    print(f"Training TD3 + BC, Env: {config.env}, Seed: {seed}")
-    print("---------------------------------------")
+#     print("---------------------------------------")
+#     print(f"Training TD3 + BC, Env: {config.env}, Seed: {seed}")
+#     print("---------------------------------------")
 
-    # Initialize actor
-    trainer = TD3_BC(**kwargs)
+#     # Initialize actor
+#     trainer = TD3_BC(**kwargs)
 
-    if config.load_model != "":
-        policy_file = Path(config.load_model)
-        trainer.load_state_dict(torch.load(policy_file))
-        actor = trainer.actor
+#     if config.load_model != "":
+#         policy_file = Path(config.load_model)
+#         trainer.load_state_dict(torch.load(policy_file))
+#         actor = trainer.actor
 
-    wandb_init(asdict(config))
+#     wandb_init(asdict(config))
 
-    evaluations = []
-    for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size)
-        batch = [b.to(config.device) for b in batch]
-        log_dict = trainer.train(batch)
-        wandb.log(log_dict, step=trainer.total_it)
-        # Evaluate episode
-        if (t + 1) % config.eval_freq == 0:
-            print(f"Time steps: {t + 1}")
-            eval_scores = eval_actor(
-                env,
-                actor,
-                device=config.device,
-                n_episodes=config.n_episodes,
-                seed=config.seed,
-            )
-            eval_score = eval_scores.mean()
-            normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
-            evaluations.append(normalized_eval_score)
-            print("---------------------------------------")
-            print(
-                f"Evaluation over {config.n_episodes} episodes: "
-                f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
-            )
-            print("---------------------------------------")
+#     evaluations = []
+#     for t in range(int(config.max_timesteps)):
+#         batch = replay_buffer.sample(config.batch_size)
+#         batch = [b.to(config.device) for b in batch]
+#         log_dict = trainer.train(batch)
+#         wandb.log(log_dict, step=trainer.total_it)
+#         # Evaluate episode
+#         if (t + 1) % config.eval_freq == 0:
+#             print(f"Time steps: {t + 1}")
+#             eval_scores = eval_actor(
+#                 env,
+#                 actor,
+#                 device=config.device,
+#                 n_episodes=config.n_episodes,
+#                 seed=config.seed,
+#             )
+#             eval_score = eval_scores.mean()
+#             normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
+#             evaluations.append(normalized_eval_score)
+#             print("---------------------------------------")
+#             print(
+#                 f"Evaluation over {config.n_episodes} episodes: "
+#                 f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
+#             )
+#             print("---------------------------------------")
 
-            if config.checkpoints_path is not None:
-                torch.save(
-                    trainer.state_dict(),
-                    os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
-                )
+#             if config.checkpoints_path is not None:
+#                 torch.save(
+#                     trainer.state_dict(),
+#                     os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
+#                 )
 
-            wandb.log(
-                {"d4rl_normalized_score": normalized_eval_score},
-                step=trainer.total_it,
-            )
+#             wandb.log(
+#                 {"d4rl_normalized_score": normalized_eval_score},
+#                 step=trainer.total_it,
+#             )
 
 
-if __name__ == "__main__":
-    train()
+# if __name__ == "__main__":
+#     train()
