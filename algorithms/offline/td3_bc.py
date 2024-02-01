@@ -234,13 +234,13 @@ class Actor(nn.Module):
             nn.Linear(256, 256),
             nn.ReLU(),
             nn.Linear(256, action_dim),
-            nn.Tanh(),
+            nn.ReLU(),
         )
 
         self.max_action = max_action
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return self.max_action * self.net(state)
+        return - self.net(state)
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
