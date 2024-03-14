@@ -240,7 +240,7 @@ class Actor(nn.Module):
         self.max_action = max_action
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return -self.net(state)
+        return - self.net(state)
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
