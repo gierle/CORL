@@ -225,28 +225,22 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, max_action: float, hidden_layers: int, activation: nn.Module):
+    def __init__(self, state_dim: int, action_dim: int, max_action: float, activation: nn.Module):
         super(Actor, self).__init__()
         
-        module_list = [
+        self.net = nn.Sequential(
             nn.Linear(state_dim, 256),
             activation(),
-        ]
-
-        for i in range(hidden_layers):
-            module_list.append(nn.Linear(256, 256))
-            module_list.append(activation())
-
-        module_list.append(activation())
-        module_list.append(nn.Linear(256, action_dim))
-        # nn.Tanh(),
-
-        self.net = nn.Sequential(*module_list)
+            nn.Linear(256, 256),
+            activation(),
+            nn.Linear(256, action_dim),
+            activation(),
+        )
 
         self.max_action = max_action
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return self.max_action * self.net(state)
+        return - self.net(state)
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
@@ -255,22 +249,16 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, hidden_layers: int, activation: nn.Module):
+    def __init__(self, state_dim: int, action_dim: int):
         super(Critic, self).__init__()
 
-        module_list = [
+        self.net = nn.Sequential(
             nn.Linear(state_dim + action_dim, 256),
-            activation(),
-        ]
-
-        for i in range(hidden_layers):
-            module_list.append(nn.Linear(256, 256))
-            module_list.append(activation())
-
-        module_list.append(activation())
-        module_list.append(nn.Linear(256, 1))
-
-        self.net = nn.Sequential(*module_list)
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+        )
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         sa = torch.cat([state, action], 1)
@@ -281,6 +269,7 @@ class TD3_BC:
     def __init__(
         self,
         max_action: float,
+        min_action: float,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
         critic_1: nn.Module,
@@ -306,6 +295,7 @@ class TD3_BC:
         self.critic_2_optimizer = critic_2_optimizer
 
         self.max_action = max_action
+        self.min_action = min_action
         self.discount = discount
         self.tau = tau
         self.policy_noise = policy_noise
@@ -330,7 +320,7 @@ class TD3_BC:
             )
 
             next_action = (self.actor_target(next_state) + noise).clamp(
-                -self.max_action, self.max_action
+                self.min_action, self.max_action
             )
 
             # Compute the target Q value
