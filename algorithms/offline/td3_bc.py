@@ -246,7 +246,7 @@ class Actor(nn.Module):
         self.max_action = max_action
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return self.max_action * self.net(state)
+        return - self.net(state)
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
@@ -281,6 +281,7 @@ class TD3_BC:
     def __init__(
         self,
         max_action: float,
+        min_action: float,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
         critic_1: nn.Module,
@@ -306,6 +307,7 @@ class TD3_BC:
         self.critic_2_optimizer = critic_2_optimizer
 
         self.max_action = max_action
+        self.min_action = min_action
         self.discount = discount
         self.tau = tau
         self.policy_noise = policy_noise
@@ -330,7 +332,7 @@ class TD3_BC:
             )
 
             next_action = (self.actor_target(next_state) + noise).clamp(
-                -self.max_action, self.max_action
+                self.min_action, self.max_action
             )
 
             # Compute the target Q value
