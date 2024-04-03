@@ -6,19 +6,16 @@ import os
 import random
 import uuid
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import wandb
 from torch.distributions import Normal
-from tqdm import trange
-
 
 # base batch size: 256
 # base learning rate: 3e-4
@@ -214,17 +211,28 @@ class Actor(nn.Module):
         state_dim: int,
         action_dim: int,
         hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
         edac_init: bool,
-        max_action: float = 1.0,
+        max_action: float,
+        min_action: float,
     ):
         super().__init__()
         self.trunk = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            *[
+                nn.Linear(state_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+            ]
         )
         # with separate layers works better than with Linear(hidden_dim, 2 * action_dim)
         self.mu = nn.Linear(hidden_dim, action_dim)
@@ -242,6 +250,7 @@ class Actor(nn.Module):
 
         self.action_dim = action_dim
         self.max_action = max_action
+        self.min_action = min_action
 
     def forward(
         self,
@@ -261,16 +270,17 @@ class Actor(nn.Module):
         else:
             action = policy_dist.rsample()
 
+        action = action.clamp(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
             log_prob = policy_dist.log_prob(action).sum(axis=-1)
             log_prob = log_prob - torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)
 
-        return tanh_action * self.max_action, log_prob
+        return -action, log_prob
 
     @torch.no_grad()
-    def act(self, state: np.ndarray, device: str) -> np.ndarray:
+    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         deterministic = not self.training
         state = torch.tensor(state, device=device, dtype=torch.float32)
         action = self(state, deterministic=deterministic)[0].cpu().numpy()
@@ -283,22 +293,29 @@ class VectorizedCritic(nn.Module):
         state_dim: int,
         action_dim: int,
         hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
         num_critics: int,
         layernorm: bool,
         edac_init: bool,
     ):
         super().__init__()
         self.critic = nn.Sequential(
-            VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
-            nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, hidden_dim, num_critics),
-            nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, hidden_dim, num_critics),
-            nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, 1, num_critics),
+            *[
+                VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
+                nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        VectorizedLinear(hidden_dim, hidden_dim, num_critics),
+                        nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
+                        activation(),
+                    )
+                ],
+                VectorizedLinear(hidden_dim, 1, num_critics),
+            ]
         )
         if edac_init:
             # init as in the EDAC paper
@@ -404,7 +421,7 @@ class LBSAC:
 
         return loss
 
-    def update(self, batch: TensorBatch) -> Dict[str, float]:
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
         state, action, reward, next_state, done = [arr.to(self.device) for arr in batch]
         # Usually updates are done in the following order: critic -> actor -> alpha
         # But we found that EDAC paper uses reverse (which gives better results)
@@ -437,16 +454,16 @@ class LBSAC:
             max_action = self.actor.max_action
             random_actions = -max_action + 2 * max_action * torch.rand_like(action)
 
-            q_random_std = self.critic(state, random_actions).std(0).mean().item()
+            self.critic(state, random_actions).std(0).mean().item()
 
         update_info = {
-            "alpha_loss": alpha_loss.item(),
+            # "alpha_loss": alpha_loss.item(),
             "critic_loss": critic_loss.item(),
             "actor_loss": actor_loss.item(),
-            "batch_entropy": actor_batch_entropy,
-            "alpha": self.alpha.item(),
-            "q_policy_std": q_policy_std,
-            "q_random_std": q_random_std,
+            # "batch_entropy": actor_batch_entropy,
+            # "alpha": self.alpha.item(),
+            # "q_policy_std": q_policy_std,
+            # "q_random_std": q_random_std,
         }
         return update_info
 
@@ -557,7 +574,7 @@ def eval_actor(
 #         # training
 #         for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
 #             batch = buffer.sample(config.batch_size)
-#             update_info = trainer.update(batch)
+#             update_info = trainer.train(batch)
 
 #             if total_updates % config.log_every == 0:
 #                 wandb.log({"epoch": epoch, **update_info})

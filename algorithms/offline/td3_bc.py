@@ -4,14 +4,12 @@ import copy
 import os
 import random
 import uuid
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -225,28 +223,35 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, max_action: float, hidden_layers: int, activation: nn.Module):
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
+    ):
         super(Actor, self).__init__()
-        
-        module_list = [
-            nn.Linear(state_dim, 256),
-            activation(),
-        ]
 
-        for i in range(hidden_layers):
-            module_list.append(nn.Linear(256, 256))
-            module_list.append(activation())
-
-        module_list.append(activation())
-        module_list.append(nn.Linear(256, action_dim))
-        # nn.Tanh(),
-
-        self.net = nn.Sequential(*module_list)
-
-        self.max_action = max_action
+        self.net = nn.Sequential(
+            *[
+                nn.Linear(state_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, action_dim),
+                nn.ReLU(),
+            ]
+        )
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return - self.net(state)
+        return -self.net(state)
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
@@ -255,22 +260,31 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, hidden_layers: int, activation: nn.Module):
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
+    ):
         super(Critic, self).__init__()
 
-        module_list = [
-            nn.Linear(state_dim + action_dim, 256),
-            activation(),
-        ]
-
-        for i in range(hidden_layers):
-            module_list.append(nn.Linear(256, 256))
-            module_list.append(activation())
-
-        module_list.append(activation())
-        module_list.append(nn.Linear(256, 1))
-
-        self.net = nn.Sequential(*module_list)
+        self.net = nn.Sequential(
+            *[
+                nn.Linear(state_dim + action_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, 1),
+            ]
+        )
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         sa = torch.cat([state, action], 1)

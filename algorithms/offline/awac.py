@@ -2,18 +2,16 @@ import os
 import random
 import uuid
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import torch.nn.functional
 import wandb
-from tqdm import trange
 
 TensorBatch = List[torch.Tensor]
 
@@ -68,7 +66,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -117,6 +117,8 @@ class Actor(nn.Module):
         state_dim: int,
         action_dim: int,
         hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
         min_log_std: float = -20.0,
         max_log_std: float = 2.0,
         min_action: float = -1.0,
@@ -124,13 +126,20 @@ class Actor(nn.Module):
     ):
         super().__init__()
         self._mlp = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
+            *[
+                nn.Linear(state_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, action_dim),
+                nn.ReLU(),
+            ]
         )
         self._log_std = nn.Parameter(torch.zeros(action_dim, dtype=torch.float32))
         self._min_log_std = min_log_std
@@ -151,19 +160,19 @@ class Actor(nn.Module):
 
     def forward(self, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         policy = self._get_policy(state)
-        action = policy.rsample()
+        action = -policy.rsample()
         action.clamp_(self._min_action, self._max_action)
         log_prob = policy.log_prob(action).sum(-1, keepdim=True)
         return action, log_prob
 
-    def act(self, state: np.ndarray, device: str) -> np.ndarray:
+    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         state_t = torch.tensor(state[None], dtype=torch.float32, device=device)
         policy = self._get_policy(state_t)
         if self._mlp.training:
             action_t = policy.sample()
         else:
             action_t = policy.mean
-        action = action_t[0].cpu().numpy()
+        action = action_t[0].cpu().detach().numpy()
         return action
 
 
@@ -173,16 +182,24 @@ class Critic(nn.Module):
         state_dim: int,
         action_dim: int,
         hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
     ):
         super().__init__()
         self._mlp = nn.Sequential(
-            nn.Linear(state_dim + action_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
+            *[
+                nn.Linear(state_dim + action_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, 1),
+            ]
         )
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
@@ -209,7 +226,7 @@ class AdvantageWeightedActorCritic:
         awac_lambda: float = 1.0,
         exp_adv_max: float = 100.0,
     ):
-        self._actor = actor
+        self.actor = actor
         self._actor_optimizer = actor_optimizer
 
         self._critic_1 = critic_1
@@ -227,7 +244,7 @@ class AdvantageWeightedActorCritic:
 
     def _actor_loss(self, states, actions):
         with torch.no_grad():
-            pi_action, _ = self._actor(states)
+            pi_action, _ = self.actor(states)
             v = torch.min(
                 self._critic_1(states, pi_action), self._critic_2(states, pi_action)
             )
@@ -240,13 +257,13 @@ class AdvantageWeightedActorCritic:
                 torch.exp(adv / self._awac_lambda), self._exp_adv_max
             )
 
-        action_log_prob = self._actor.log_prob(states, actions)
+        action_log_prob = self.actor.log_prob(states, actions)
         loss = (-action_log_prob * weights).mean()
         return loss
 
     def _critic_loss(self, states, actions, rewards, dones, next_states):
         with torch.no_grad():
-            next_actions, _ = self._actor(next_states)
+            next_actions, _ = self.actor(next_states)
 
             q_next = torch.min(
                 self._target_critic_1(next_states, next_actions),
@@ -278,7 +295,7 @@ class AdvantageWeightedActorCritic:
         self._actor_optimizer.step()
         return loss.item()
 
-    def update(self, batch: TensorBatch) -> Dict[str, float]:
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
         states, actions, rewards, next_states, dones = batch
         critic_loss = self._update_critic(states, actions, rewards, dones, next_states)
         actor_loss = self._update_actor(states, actions)
@@ -291,13 +308,13 @@ class AdvantageWeightedActorCritic:
 
     def state_dict(self) -> Dict[str, Any]:
         return {
-            "actor": self._actor.state_dict(),
+            "actor": self.actor.state_dict(),
             "critic_1": self._critic_1.state_dict(),
             "critic_2": self._critic_2.state_dict(),
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
-        self._actor.load_state_dict(state_dict["actor"])
+        self.actor.load_state_dict(state_dict["actor"])
         self._critic_1.load_state_dict(state_dict["critic_1"])
         self._critic_2.load_state_dict(state_dict["critic_2"])
 
@@ -432,8 +449,10 @@ def wandb_init(config: dict) -> None:
 #     critic_2 = Critic(**actor_critic_kwargs)
 #     critic_1.to(config.device)
 #     critic_2.to(config.device)
-#     critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), lr=config.learning_rate)
-#     critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), lr=config.learning_rate)
+#     critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), 
+#                                           lr=config.learning_rate)
+#     critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), 
+#                                           lr=config.learning_rate)
 
 #     awac = AdvantageWeightedActorCritic(
 #         actor=actor,
@@ -457,7 +476,7 @@ def wandb_init(config: dict) -> None:
 #     for t in trange(config.num_train_ops, ncols=80):
 #         batch = replay_buffer.sample(config.batch_size)
 #         batch = [b.to(config.device) for b in batch]
-#         update_result = awac.update(batch)
+#         update_result = awac.train(batch)
 #         wandb.log(update_result, step=t)
 #         if (t + 1) % config.eval_frequency == 0:
 #             eval_scores = eval_actor(

@@ -4,14 +4,12 @@ import os
 import random
 import uuid
 from copy import deepcopy
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -314,7 +312,8 @@ class ReparameterizedTanhGaussian(nn.Module):
             )
 
         if deterministic:
-            action_sample = torch.tanh(mean)
+            action_sample = mean
+            # action_sample = torch.tanh(mean)
         else:
             action_sample = action_distribution.rsample()
 
@@ -330,17 +329,15 @@ class TanhGaussianPolicy(nn.Module):
         action_dim: int,
         hidden_dim: int,
         activation: nn.Module,
-        max_action: float,
         n_hidden_layers: int,
         log_std_multiplier: float = 1.0,
         log_std_offset: float = -1.0,
         orthogonal_init: bool = False,
         no_tanh: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         self.observation_dim = state_dim
         self.action_dim = action_dim
-        self.max_action = max_action
         self.orthogonal_init = orthogonal_init
         self.no_tanh = no_tanh
 
@@ -381,7 +378,7 @@ class TanhGaussianPolicy(nn.Module):
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
-        return self.max_action * actions, log_probs
+        return -actions, log_probs
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu"):
@@ -449,21 +446,23 @@ class Scalar(nn.Module):
 class ContinuousCQL:
     def __init__(
         self,
-        critic_1,
-        critic_1_optimizer,
-        critic_2,
-        critic_2_optimizer,
-        actor,
-        actor_optimizer,
+        critic_1: nn.Module,
+        critic_1_optimizer: nn.Module,
+        critic_2: nn.Module,
+        critic_2_optimizer: nn.Module,
+        actor: nn.Module,
+        actor_optimizer: nn.Module,
         target_entropy: float,
+        max_action: int,
+        min_action: int,
         discount: float = 0.99,
         alpha_multiplier: float = 1.0,
         use_automatic_entropy_tuning: bool = True,
         backup_entropy: bool = False,
-        policy_lr: bool = 3e-4,
-        qf_lr: bool = 3e-4,
+        policy_lr: float = 3e-4,
+        qf_lr: float = 3e-4,
         soft_target_update_rate: float = 5e-3,
-        bc_steps=100000,
+        bc_steps: int = 100000,
         target_update_period: int = 1,
         cql_n_actions: int = 10,
         cql_importance_sample: bool = True,
@@ -475,7 +474,7 @@ class ContinuousCQL:
         cql_clip_diff_min: float = -np.inf,
         cql_clip_diff_max: float = np.inf,
         device: str = "cpu",
-    ):
+    ) -> None:
         super().__init__()
 
         self.discount = discount
@@ -530,11 +529,16 @@ class ContinuousCQL:
 
         self.total_it = 0
 
-    def update_target_network(self, soft_target_update_rate: float):
+        self.max_action = max_action
+        self.min_action = min_action
+
+    def update_target_network(self, soft_target_update_rate: float) -> None:
         soft_update(self.target_critic_1, self.critic_1, soft_target_update_rate)
         soft_update(self.target_critic_2, self.critic_2, soft_target_update_rate)
 
-    def _alpha_and_alpha_loss(self, observations: torch.Tensor, log_pi: torch.Tensor):
+    def _alpha_and_alpha_loss(
+        self, observations: torch.Tensor, log_pi: torch.Tensor
+    ) -> Union[Any, Any]:
         if self.use_automatic_entropy_tuning:
             alpha_loss = -(
                 self.log_alpha() * (log_pi + self.target_entropy).detach()
@@ -761,6 +765,8 @@ class ContinuousCQL:
 
         new_actions, log_pi = self.actor(observations)
 
+        new_actions = new_actions.clamp(self.min_action, self.max_action)
+
         alpha, alpha_loss = self._alpha_and_alpha_loss(observations, log_pi)
 
         """ Policy loss """
@@ -798,7 +804,12 @@ class ContinuousCQL:
         if self.total_it % self.target_update_period == 0:
             self.update_target_network(self.soft_target_update_rate)
 
-        return log_dict
+        standardized_log_dict = {
+            "actor_loss": policy_loss.item(),
+            "critic_loss": qf_loss.item(),
+            # "critic_loss": log_dict["qf1_loss"] + log_dict["qf2_loss"]
+        }
+        return standardized_log_dict
 
     def state_dict(self) -> Dict[str, Any]:
         return {
@@ -900,9 +911,11 @@ class ContinuousCQL:
 #         config.orthogonal_init,
 #         config.q_n_hidden_layers,
 #     ).to(config.device)
-#     critic_2 = FullyConnectedQFunction(state_dim, action_dim, config.orthogonal_init).to(
-#         config.device
-#     )
+#     critic_2 = FullyConnectedQFunction(
+#     state_dim,
+#     action_dim,
+#     config.orthogonal_init
+# ).to(config.device)
 #     critic_1_optimizer = torch.optim.Adam(list(critic_1.parameters()), config.qf_lr)
 #     critic_2_optimizer = torch.optim.Adam(list(critic_2.parameters()), config.qf_lr)
 

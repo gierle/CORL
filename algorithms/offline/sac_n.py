@@ -6,18 +6,16 @@ import os
 import random
 import uuid
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import wandb
 from torch.distributions import Normal
-from tqdm import trange
 
 @dataclass
 class TrainConfig:
@@ -127,7 +125,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -178,7 +178,9 @@ class VectorizedLinear(nn.Module):
         self.out_features = out_features
         self.ensemble_size = ensemble_size
 
-        self.weight = nn.Parameter(torch.empty(ensemble_size, in_features, out_features))
+        self.weight = nn.Parameter(
+            torch.empty(ensemble_size, in_features, out_features)
+        )
         self.bias = nn.Parameter(torch.empty(ensemble_size, 1, out_features))
 
         self.reset_parameters()
@@ -201,16 +203,31 @@ class VectorizedLinear(nn.Module):
 
 class Actor(nn.Module):
     def __init__(
-        self, state_dim: int, action_dim: int, hidden_dim: int, max_action: float = 1.0
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
+        max_action: float,
+        min_action: float,
     ):
         super().__init__()
         self.trunk = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            *[
+                nn.Linear(state_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+            ]
         )
         # with separate layers works better than with Linear(hidden_dim, 2 * action_dim)
         self.mu = nn.Linear(hidden_dim, action_dim)
@@ -227,6 +244,7 @@ class Actor(nn.Module):
 
         self.action_dim = action_dim
         self.max_action = max_action
+        self.min_action = min_action
 
     def forward(
         self,
@@ -246,16 +264,17 @@ class Actor(nn.Module):
         else:
             action = policy_dist.rsample()
 
+        action = action.clamp(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
             log_prob = policy_dist.log_prob(action).sum(axis=-1)
             log_prob = log_prob - torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)
 
-        return tanh_action * self.max_action, log_prob
+        return -action, log_prob
 
     @torch.no_grad()
-    def act(self, state: np.ndarray, device: str) -> np.ndarray:
+    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         deterministic = not self.training
         state = torch.tensor(state, device=device, dtype=torch.float32)
         action = self(state, deterministic=deterministic)[0].cpu().numpy()
@@ -264,17 +283,29 @@ class Actor(nn.Module):
 
 class VectorizedCritic(nn.Module):
     def __init__(
-        self, state_dim: int, action_dim: int, hidden_dim: int, num_critics: int
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        activation: nn.Module,
+        num_critics: int,
     ):
         super().__init__()
         self.critic = nn.Sequential(
-            VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, hidden_dim, num_critics),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, hidden_dim, num_critics),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, 1, num_critics),
+            *[
+                VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        VectorizedLinear(hidden_dim, hidden_dim, num_critics),
+                        activation(),
+                    )
+                ],
+                VectorizedLinear(hidden_dim, 1, num_critics),
+            ]
         )
         # init as in the EDAC paper
         for layer in self.critic[::2]:
@@ -327,7 +358,9 @@ class SACN:
         self.log_alpha = torch.tensor(
             [0.0], dtype=torch.float32, device=self.device, requires_grad=True
         )
-        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_learning_rate)
+        self.alpha_optimizer = torch.optim.Adam(
+            [self.log_alpha], lr=alpha_learning_rate
+        )
         self.alpha = self.log_alpha.exp().detach()
 
     def _alpha_loss(self, state: torch.Tensor) -> torch.Tensor:
@@ -376,7 +409,7 @@ class SACN:
 
         return loss
 
-    def update(self, batch: TensorBatch) -> Dict[str, float]:
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
         state, action, reward, next_state, done = [arr.to(self.device) for arr in batch]
         # Usually updates are done in the following order: critic -> actor -> alpha
         # But we found that EDAC paper uses reverse (which gives better results)
@@ -409,16 +442,16 @@ class SACN:
             max_action = self.actor.max_action
             random_actions = -max_action + 2 * max_action * torch.rand_like(action)
 
-            q_random_std = self.critic(state, random_actions).std(0).mean().item()
+            self.critic(state, random_actions).std(0).mean().item()
 
         update_info = {
-            "alpha_loss": alpha_loss.item(),
+            # "alpha_loss": alpha_loss.item(),
             "critic_loss": critic_loss.item(),
             "actor_loss": actor_loss.item(),
-            "batch_entropy": actor_batch_entropy,
-            "alpha": self.alpha.item(),
-            "q_policy_std": q_policy_std,
-            "q_random_std": q_random_std,
+            # "batch_entropy": actor_batch_entropy,
+            # "alpha": self.alpha.item(),
+            # "q_policy_std": q_policy_std,
+            # "q_random_std": q_random_std,
         }
         return update_info
 
@@ -515,7 +548,8 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 #     # Actor & Critic setup
 #     actor = Actor(state_dim, action_dim, config.hidden_dim, config.max_action)
 #     actor.to(config.device)
-#     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_learning_rate)
+#     actor_optimizer = torch.optim.Adam(actor.parameters(),
+#                                        lr=config.actor_learning_rate)
 #     critic = VectorizedCritic(
 #         state_dim, action_dim, config.hidden_dim, config.num_critics
 #     )
@@ -546,7 +580,7 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 #         # training
 #         for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
 #             batch = buffer.sample(config.batch_size)
-#             update_info = trainer.update(batch)
+#             update_info = trainer.train(batch)
 
 #             if total_updates % config.log_every == 0:
 #                 wandb.log({"epoch": epoch, **update_info})
