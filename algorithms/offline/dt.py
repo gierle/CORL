@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Union
 
-import d4rl  # noqa
+# import d4rl  # noqa
 import gym
 import numpy as np
 import pyrallis

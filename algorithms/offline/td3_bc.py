@@ -225,17 +225,23 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, max_action: float):
+    def __init__(self, state_dim: int, action_dim: int, max_action: float, hidden_layers: int, activation: nn.Module):
         super(Actor, self).__init__()
-
-        self.net = nn.Sequential(
+        
+        module_list = [
             nn.Linear(state_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, action_dim),
-            nn.ReLU(),
-        )
+            activation(),
+        ]
+
+        for i in range(hidden_layers):
+            module_list.append(nn.Linear(256, 256))
+            module_list.append(activation())
+
+        module_list.append(activation())
+        module_list.append(nn.Linear(256, action_dim))
+        # nn.Tanh(),
+
+        self.net = nn.Sequential(*module_list)
 
         self.max_action = max_action
 
@@ -249,16 +255,22 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int):
+    def __init__(self, state_dim: int, action_dim: int, hidden_layers: int, activation: nn.Module):
         super(Critic, self).__init__()
 
-        self.net = nn.Sequential(
+        module_list = [
             nn.Linear(state_dim + action_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1),
-        )
+            activation(),
+        ]
+
+        for i in range(hidden_layers):
+            module_list.append(nn.Linear(256, 256))
+            module_list.append(activation())
+
+        module_list.append(activation())
+        module_list.append(nn.Linear(256, 1))
+
+        self.net = nn.Sequential(*module_list)
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         sa = torch.cat([state, action], 1)

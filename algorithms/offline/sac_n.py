@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import d4rl
+# import d4rl
 import gym
 import numpy as np
 import pyrallis
@@ -489,99 +489,99 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
         dataset["rewards"] -= 1.0
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
-    set_seed(config.train_seed, deterministic_torch=config.deterministic_torch)
-    wandb_init(asdict(config))
+# @pyrallis.wrap()
+# def train(config: TrainConfig):
+#     set_seed(config.train_seed, deterministic_torch=config.deterministic_torch)
+#     wandb_init(asdict(config))
 
-    # data, evaluation, env setup
-    eval_env = wrap_env(gym.make(config.env_name))
-    state_dim = eval_env.observation_space.shape[0]
-    action_dim = eval_env.action_space.shape[0]
+#     # data, evaluation, env setup
+#     eval_env = wrap_env(gym.make(config.env_name))
+#     state_dim = eval_env.observation_space.shape[0]
+#     action_dim = eval_env.action_space.shape[0]
 
-    d4rl_dataset = d4rl.qlearning_dataset(eval_env)
+#     d4rl_dataset = d4rl.qlearning_dataset(eval_env)
 
-    if config.normalize_reward:
-        modify_reward(d4rl_dataset, config.env_name)
+#     if config.normalize_reward:
+#         modify_reward(d4rl_dataset, config.env_name)
 
-    buffer = ReplayBuffer(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        buffer_size=config.buffer_size,
-        device=config.device,
-    )
-    buffer.load_d4rl_dataset(d4rl_dataset)
+#     buffer = ReplayBuffer(
+#         state_dim=state_dim,
+#         action_dim=action_dim,
+#         buffer_size=config.buffer_size,
+#         device=config.device,
+#     )
+#     buffer.load_d4rl_dataset(d4rl_dataset)
 
-    # Actor & Critic setup
-    actor = Actor(state_dim, action_dim, config.hidden_dim, config.max_action)
-    actor.to(config.device)
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_learning_rate)
-    critic = VectorizedCritic(
-        state_dim, action_dim, config.hidden_dim, config.num_critics
-    )
-    critic.to(config.device)
-    critic_optimizer = torch.optim.Adam(
-        critic.parameters(), lr=config.critic_learning_rate
-    )
+#     # Actor & Critic setup
+#     actor = Actor(state_dim, action_dim, config.hidden_dim, config.max_action)
+#     actor.to(config.device)
+#     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_learning_rate)
+#     critic = VectorizedCritic(
+#         state_dim, action_dim, config.hidden_dim, config.num_critics
+#     )
+#     critic.to(config.device)
+#     critic_optimizer = torch.optim.Adam(
+#         critic.parameters(), lr=config.critic_learning_rate
+#     )
 
-    trainer = SACN(
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        critic=critic,
-        critic_optimizer=critic_optimizer,
-        gamma=config.gamma,
-        tau=config.tau,
-        alpha_learning_rate=config.alpha_learning_rate,
-        device=config.device,
-    )
-    # saving config to the checkpoint
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
+#     trainer = SACN(
+#         actor=actor,
+#         actor_optimizer=actor_optimizer,
+#         critic=critic,
+#         critic_optimizer=critic_optimizer,
+#         gamma=config.gamma,
+#         tau=config.tau,
+#         alpha_learning_rate=config.alpha_learning_rate,
+#         device=config.device,
+#     )
+#     # saving config to the checkpoint
+#     if config.checkpoints_path is not None:
+#         print(f"Checkpoints path: {config.checkpoints_path}")
+#         os.makedirs(config.checkpoints_path, exist_ok=True)
+#         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
+#             pyrallis.dump(config, f)
 
-    total_updates = 0.0
-    for epoch in trange(config.num_epochs, desc="Training"):
-        # training
-        for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
-            batch = buffer.sample(config.batch_size)
-            update_info = trainer.update(batch)
+#     total_updates = 0.0
+#     for epoch in trange(config.num_epochs, desc="Training"):
+#         # training
+#         for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
+#             batch = buffer.sample(config.batch_size)
+#             update_info = trainer.update(batch)
 
-            if total_updates % config.log_every == 0:
-                wandb.log({"epoch": epoch, **update_info})
+#             if total_updates % config.log_every == 0:
+#                 wandb.log({"epoch": epoch, **update_info})
 
-            total_updates += 1
+#             total_updates += 1
 
-        # evaluation
-        if epoch % config.eval_every == 0 or epoch == config.num_epochs - 1:
-            eval_returns = eval_actor(
-                env=eval_env,
-                actor=actor,
-                n_episodes=config.eval_episodes,
-                seed=config.eval_seed,
-                device=config.device,
-            )
-            eval_log = {
-                "eval/reward_mean": np.mean(eval_returns),
-                "eval/reward_std": np.std(eval_returns),
-                "epoch": epoch,
-            }
-            if hasattr(eval_env, "get_normalized_score"):
-                normalized_score = eval_env.get_normalized_score(eval_returns) * 100.0
-                eval_log["eval/normalized_score_mean"] = np.mean(normalized_score)
-                eval_log["eval/normalized_score_std"] = np.std(normalized_score)
+#         # evaluation
+#         if epoch % config.eval_every == 0 or epoch == config.num_epochs - 1:
+#             eval_returns = eval_actor(
+#                 env=eval_env,
+#                 actor=actor,
+#                 n_episodes=config.eval_episodes,
+#                 seed=config.eval_seed,
+#                 device=config.device,
+#             )
+#             eval_log = {
+#                 "eval/reward_mean": np.mean(eval_returns),
+#                 "eval/reward_std": np.std(eval_returns),
+#                 "epoch": epoch,
+#             }
+#             if hasattr(eval_env, "get_normalized_score"):
+#                 normalized_score = eval_env.get_normalized_score(eval_returns) * 100.0
+#                 eval_log["eval/normalized_score_mean"] = np.mean(normalized_score)
+#                 eval_log["eval/normalized_score_std"] = np.std(normalized_score)
 
-            wandb.log(eval_log)
+#             wandb.log(eval_log)
 
-            if config.checkpoints_path is not None:
-                torch.save(
-                    trainer.state_dict(),
-                    os.path.join(config.checkpoints_path, f"{epoch}.pt"),
-                )
+#             if config.checkpoints_path is not None:
+#                 torch.save(
+#                     trainer.state_dict(),
+#                     os.path.join(config.checkpoints_path, f"{epoch}.pt"),
+#                 )
 
-    wandb.finish()
+#     wandb.finish()
 
 
-if __name__ == "__main__":
-    train()
+# if __name__ == "__main__":
+#     train()
