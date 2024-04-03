@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import d4rl
+# import d4rl
 import gym
 import numpy as np
 import pyrallis
@@ -392,93 +392,93 @@ def wandb_init(config: dict) -> None:
     wandb.run.save()
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
-    env = gym.make(config.env_name)
-    set_seed(config.seed, env, deterministic_torch=config.deterministic_torch)
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
-    dataset = d4rl.qlearning_dataset(env)
+# @pyrallis.wrap()
+# def train(config: TrainConfig):
+#     env = gym.make(config.env_name)
+#     set_seed(config.seed, env, deterministic_torch=config.deterministic_torch)
+#     state_dim = env.observation_space.shape[0]
+#     action_dim = env.action_space.shape[0]
+#     dataset = d4rl.qlearning_dataset(env)
 
-    if config.normalize_reward:
-        modify_reward(dataset, config.env_name)
+#     if config.normalize_reward:
+#         modify_reward(dataset, config.env_name)
 
-    state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
-    dataset["observations"] = normalize_states(
-        dataset["observations"], state_mean, state_std
-    )
-    dataset["next_observations"] = normalize_states(
-        dataset["next_observations"], state_mean, state_std
-    )
-    env = wrap_env(env, state_mean=state_mean, state_std=state_std)
-    replay_buffer = ReplayBuffer(
-        state_dim,
-        action_dim,
-        config.buffer_size,
-        config.device,
-    )
-    replay_buffer.load_d4rl_dataset(dataset)
+#     state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
+#     dataset["observations"] = normalize_states(
+#         dataset["observations"], state_mean, state_std
+#     )
+#     dataset["next_observations"] = normalize_states(
+#         dataset["next_observations"], state_mean, state_std
+#     )
+#     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
+#     replay_buffer = ReplayBuffer(
+#         state_dim,
+#         action_dim,
+#         config.buffer_size,
+#         config.device,
+#     )
+#     replay_buffer.load_d4rl_dataset(dataset)
 
-    actor_critic_kwargs = {
-        "state_dim": state_dim,
-        "action_dim": action_dim,
-        "hidden_dim": config.hidden_dim,
-    }
+#     actor_critic_kwargs = {
+#         "state_dim": state_dim,
+#         "action_dim": action_dim,
+#         "hidden_dim": config.hidden_dim,
+#     }
 
-    actor = Actor(**actor_critic_kwargs)
-    actor.to(config.device)
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.learning_rate)
-    critic_1 = Critic(**actor_critic_kwargs)
-    critic_2 = Critic(**actor_critic_kwargs)
-    critic_1.to(config.device)
-    critic_2.to(config.device)
-    critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), lr=config.learning_rate)
-    critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), lr=config.learning_rate)
+#     actor = Actor(**actor_critic_kwargs)
+#     actor.to(config.device)
+#     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.learning_rate)
+#     critic_1 = Critic(**actor_critic_kwargs)
+#     critic_2 = Critic(**actor_critic_kwargs)
+#     critic_1.to(config.device)
+#     critic_2.to(config.device)
+#     critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), lr=config.learning_rate)
+#     critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), lr=config.learning_rate)
 
-    awac = AdvantageWeightedActorCritic(
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        critic_1=critic_1,
-        critic_1_optimizer=critic_1_optimizer,
-        critic_2=critic_2,
-        critic_2_optimizer=critic_2_optimizer,
-        gamma=config.gamma,
-        tau=config.tau,
-        awac_lambda=config.awac_lambda,
-    )
-    wandb_init(asdict(config))
+#     awac = AdvantageWeightedActorCritic(
+#         actor=actor,
+#         actor_optimizer=actor_optimizer,
+#         critic_1=critic_1,
+#         critic_1_optimizer=critic_1_optimizer,
+#         critic_2=critic_2,
+#         critic_2_optimizer=critic_2_optimizer,
+#         gamma=config.gamma,
+#         tau=config.tau,
+#         awac_lambda=config.awac_lambda,
+#     )
+#     wandb_init(asdict(config))
 
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
+#     if config.checkpoints_path is not None:
+#         print(f"Checkpoints path: {config.checkpoints_path}")
+#         os.makedirs(config.checkpoints_path, exist_ok=True)
+#         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
+#             pyrallis.dump(config, f)
 
-    for t in trange(config.num_train_ops, ncols=80):
-        batch = replay_buffer.sample(config.batch_size)
-        batch = [b.to(config.device) for b in batch]
-        update_result = awac.update(batch)
-        wandb.log(update_result, step=t)
-        if (t + 1) % config.eval_frequency == 0:
-            eval_scores = eval_actor(
-                env, actor, config.device, config.n_test_episodes, config.test_seed
-            )
+#     for t in trange(config.num_train_ops, ncols=80):
+#         batch = replay_buffer.sample(config.batch_size)
+#         batch = [b.to(config.device) for b in batch]
+#         update_result = awac.update(batch)
+#         wandb.log(update_result, step=t)
+#         if (t + 1) % config.eval_frequency == 0:
+#             eval_scores = eval_actor(
+#                 env, actor, config.device, config.n_test_episodes, config.test_seed
+#             )
 
-            wandb.log({"eval_score": eval_scores.mean()}, step=t)
-            if hasattr(env, "get_normalized_score"):
-                normalized_eval_scores = env.get_normalized_score(eval_scores) * 100.0
-                wandb.log(
-                    {"d4rl_normalized_score": normalized_eval_scores.mean()}, step=t
-                )
+#             wandb.log({"eval_score": eval_scores.mean()}, step=t)
+#             if hasattr(env, "get_normalized_score"):
+#                 normalized_eval_scores = env.get_normalized_score(eval_scores) * 100.0
+#                 wandb.log(
+#                     {"d4rl_normalized_score": normalized_eval_scores.mean()}, step=t
+#                 )
 
-            if config.checkpoints_path is not None:
-                torch.save(
-                    awac.state_dict(),
-                    os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
-                )
+#             if config.checkpoints_path is not None:
+#                 torch.save(
+#                     awac.state_dict(),
+#                     os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
+#                 )
 
-    wandb.finish()
+#     wandb.finish()
 
 
-if __name__ == "__main__":
-    train()
+# if __name__ == "__main__":
+#     train()
