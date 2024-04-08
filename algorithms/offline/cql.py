@@ -276,6 +276,8 @@ def init_module_weights(
 class ReparameterizedTanhGaussian(nn.Module):
     def __init__(
         self,
+        max_action: int,
+        min_action: int,
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
         no_tanh: bool = False,
@@ -284,11 +286,13 @@ class ReparameterizedTanhGaussian(nn.Module):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         self.no_tanh = no_tanh
+        self.max_action = max_action
+        self.min_action = min_action
 
     def log_prob(
         self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
     ) -> torch.Tensor:
-        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        log_std.clamp_(self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
         if self.no_tanh:
             action_distribution = Normal(mean, std)
@@ -301,7 +305,7 @@ class ReparameterizedTanhGaussian(nn.Module):
     def forward(
         self, mean: torch.Tensor, log_std: torch.Tensor, deterministic: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        log_std.clamp_(self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
 
         if self.no_tanh:
@@ -317,6 +321,8 @@ class ReparameterizedTanhGaussian(nn.Module):
         else:
             action_sample = action_distribution.rsample()
 
+        action_sample.clamp_(self.min_action, self.max_action)
+
         log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
 
         return action_sample, log_prob
@@ -330,6 +336,8 @@ class TanhGaussianPolicy(nn.Module):
         hidden_dim: int,
         activation: nn.Module,
         n_hidden_layers: int,
+        max_action: int,
+        min_action: int,
         log_std_multiplier: float = 1.0,
         log_std_offset: float = -1.0,
         orthogonal_init: bool = False,
@@ -340,6 +348,9 @@ class TanhGaussianPolicy(nn.Module):
         self.action_dim = action_dim
         self.orthogonal_init = orthogonal_init
         self.no_tanh = no_tanh
+
+        self.max_action = max_action
+        self.min_action = min_action
 
         layers = [nn.Linear(state_dim, hidden_dim), activation()]
         for _ in range(n_hidden_layers - 1):
@@ -353,7 +364,9 @@ class TanhGaussianPolicy(nn.Module):
 
         self.log_std_multiplier = Scalar(log_std_multiplier)
         self.log_std_offset = Scalar(log_std_offset)
-        self.tanh_gaussian = ReparameterizedTanhGaussian(no_tanh=no_tanh)
+        self.tanh_gaussian = ReparameterizedTanhGaussian(
+            max_action=max_action, min_action=min_action, no_tanh=no_tanh
+        )
 
     def log_prob(
         self, observations: torch.Tensor, actions: torch.Tensor
@@ -361,6 +374,7 @@ class TanhGaussianPolicy(nn.Module):
         if actions.ndim == 3:
             observations = extend_and_repeat(observations, 1, actions.shape[1])
         base_network_output = self.base_network(observations)
+        base_network_output.clamp_(self.min_action, self.max_action)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
         _, log_probs = self.tanh_gaussian(mean, log_std, False)
@@ -375,6 +389,7 @@ class TanhGaussianPolicy(nn.Module):
         if repeat is not None:
             observations = extend_and_repeat(observations, 1, repeat)
         base_network_output = self.base_network(observations)
+        base_network_output.clamp_(self.min_action, self.max_action)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
@@ -453,8 +468,6 @@ class ContinuousCQL:
         actor: nn.Module,
         actor_optimizer: nn.Module,
         target_entropy: float,
-        max_action: int,
-        min_action: int,
         discount: float = 0.99,
         alpha_multiplier: float = 1.0,
         use_automatic_entropy_tuning: bool = True,
@@ -528,9 +541,6 @@ class ContinuousCQL:
         )
 
         self.total_it = 0
-
-        self.max_action = max_action
-        self.min_action = min_action
 
     def update_target_network(self, soft_target_update_rate: float) -> None:
         soft_update(self.target_critic_1, self.critic_1, soft_target_update_rate)
@@ -764,8 +774,6 @@ class ContinuousCQL:
         self.total_it += 1
 
         new_actions, log_pi = self.actor(observations)
-
-        new_actions = new_actions.clamp(self.min_action, self.max_action)
 
         alpha, alpha_loss = self._alpha_and_alpha_loss(observations, log_pi)
 

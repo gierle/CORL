@@ -264,7 +264,7 @@ class Actor(nn.Module):
         else:
             action = policy_dist.rsample()
 
-        action = action.clamp(self.min_action, self.max_action)
+        action.clamp_(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
@@ -490,8 +490,10 @@ class EDAC:
             soft_update(self.target_critic, self.critic, tau=self.tau)
             # for logging, Q-ensemble std estimate with the random actions:
             # a ~ U[-max_action, max_action]
-            max_action = self.actor.max_action
-            random_actions = -max_action + 2 * max_action * torch.rand_like(action)
+            random_actions = (
+                -self.actor.max_action
+                + 2 * self.actor.max_action * torch.rand_like(action)
+            )
 
             self.critic(state, random_actions).std(0).mean().item()
 

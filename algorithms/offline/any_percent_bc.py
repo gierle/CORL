@@ -233,8 +233,6 @@ class Actor(nn.Module):
         hidden_dim: int,
         hidden_layers: int,
         activation: nn.Module,
-        max_action: float,
-        min_action: float,
     ):
         super(Actor, self).__init__()
 
@@ -255,9 +253,6 @@ class Actor(nn.Module):
             ]
         )
 
-        self.max_action = max_action
-        self.min_action = min_action
-
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return -self.net(state)
 
@@ -271,6 +266,7 @@ class BC:
     def __init__(
         self,
         max_action: np.ndarray,
+        min_action: np.ndarray,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
         discount: float = 0.99,
@@ -279,6 +275,7 @@ class BC:
         self.actor = actor
         self.actor_optimizer = actor_optimizer
         self.max_action = max_action
+        self.min_action = min_action
         self.discount = discount
 
         self.total_it = 0
@@ -292,6 +289,8 @@ class BC:
 
         # Compute actor loss
         pi = self.actor(state)
+        pi = pi.clamp(self.min_action, self.max_action)
+
         actor_loss = F.mse_loss(pi, action)
         log_dict["actor_loss"] = actor_loss.item()
         # Optimize the actor

@@ -264,7 +264,7 @@ class Actor(nn.Module):
         else:
             action = policy_dist.rsample()
 
-        action = action.clamp(self.min_action, self.max_action)
+        action.clamp_(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
