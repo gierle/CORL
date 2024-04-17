@@ -281,6 +281,7 @@ class ReparameterizedTanhGaussian(nn.Module):
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
         no_tanh: bool = False,
+        clamp_before: bool = False,
     ):
         super().__init__()
         self.log_std_min = log_std_min
@@ -288,6 +289,8 @@ class ReparameterizedTanhGaussian(nn.Module):
         self.no_tanh = no_tanh
         self.max_action = max_action
         self.min_action = min_action
+        self.clamp_before = clamp_before
+
 
     def log_prob(
         self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
@@ -321,9 +324,12 @@ class ReparameterizedTanhGaussian(nn.Module):
         else:
             action_sample = action_distribution.rsample()
 
-        action_sample.clamp_(self.min_action, self.max_action)
-
-        log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
+        if self.clamp_before:
+            action_sample.clamp_(self.min_action, self.max_action)
+            log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
+        else: 
+            log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
+            action_sample.clamp_(self.min_action, self.max_action)
 
         return action_sample, log_prob
 
@@ -374,7 +380,6 @@ class TanhGaussianPolicy(nn.Module):
         if actions.ndim == 3:
             observations = extend_and_repeat(observations, 1, actions.shape[1])
         base_network_output = self.base_network(observations)
-        base_network_output.clamp_(self.min_action, self.max_action)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
         _, log_probs = self.tanh_gaussian(mean, log_std, False)
@@ -389,7 +394,6 @@ class TanhGaussianPolicy(nn.Module):
         if repeat is not None:
             observations = extend_and_repeat(observations, 1, repeat)
         base_network_output = self.base_network(observations)
-        base_network_output.clamp_(self.min_action, self.max_action)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
