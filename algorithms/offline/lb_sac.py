@@ -231,7 +231,7 @@ class Actor(nn.Module):
                     )
                 ],
                 nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
+                # nn.ReLU(),
             ]
         )
         # with separate layers works better than with Linear(hidden_dim, 2 * action_dim)
@@ -266,9 +266,9 @@ class Actor(nn.Module):
         policy_dist = Normal(mu, torch.exp(log_sigma))
 
         if deterministic:
-            action = mu
+            action = -mu
         else:
-            action = policy_dist.rsample()
+            action = -policy_dist.rsample()
 
         action.clamp_(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
@@ -277,7 +277,7 @@ class Actor(nn.Module):
             log_prob = policy_dist.log_prob(action).sum(axis=-1)
             log_prob = log_prob - torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)
 
-        return -action, log_prob
+        return action, log_prob
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:

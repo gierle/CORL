@@ -138,7 +138,7 @@ class Actor(nn.Module):
                     )
                 ],
                 nn.Linear(hidden_dim, action_dim),
-                nn.ReLU(),
+                # nn.ReLU(),
             ]
         )
         self._log_std = nn.Parameter(torch.zeros(action_dim, dtype=torch.float32))
@@ -160,13 +160,13 @@ class Actor(nn.Module):
 
     def forward(self, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         policy = self._get_policy(state)
-        action = -policy.rsample()
+        action = policy.rsample()
         action.clamp_(self._min_action, self._max_action)
         log_prob = policy.log_prob(action).sum(-1, keepdim=True)
         return action, log_prob
 
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
-        state_t = torch.tensor(state[None], dtype=torch.float32, device=device)
+        state_t = torch.tensor(state, dtype=torch.float32, device=device)
         policy = self._get_policy(state_t)
         if self._mlp.training:
             action_t = policy.sample()

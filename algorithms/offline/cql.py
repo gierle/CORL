@@ -329,7 +329,7 @@ class ReparameterizedTanhGaussian(nn.Module):
             log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
         else: 
             log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
-            action_sample.clamp_(self.min_action, self.max_action)
+            (-action_sample).clamp_(self.min_action, self.max_action)
 
         return action_sample, log_prob
 
