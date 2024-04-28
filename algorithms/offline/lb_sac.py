@@ -266,11 +266,11 @@ class Actor(nn.Module):
         policy_dist = Normal(mu, torch.exp(log_sigma))
 
         if deterministic:
-            action = -mu
+            action = mu
         else:
-            action = -policy_dist.rsample()
+            action = policy_dist.rsample()
 
-        action.clamp_(self.min_action, self.max_action)
+        # action.clamp_(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
@@ -454,7 +454,7 @@ class LBSAC:
             max_action = self.actor.max_action
             random_actions = -max_action + 2 * max_action * torch.rand_like(action)
 
-            self.critic(state, random_actions).std(0).mean().item()
+            q_random_std = self.critic(state, random_actions).std(0).mean().item()
 
         update_info = {
             # "alpha_loss": alpha_loss.item(),
@@ -465,6 +465,15 @@ class LBSAC:
             # "q_policy_std": q_policy_std,
             # "q_random_std": q_random_std,
         }
+        # wandb.log({
+        #     "alpha_loss": alpha_loss.item(),
+        #     "critic_loss": critic_loss.item(),
+        #     "actor_loss": actor_loss.item(),
+        #     "batch_entropy": actor_batch_entropy,
+        #     "alpha": self.alpha.item(),
+        #     "q_policy_std": q_policy_std,
+        #     "q_random_std": q_random_std,
+        # })
         return update_info
 
     def state_dict(self) -> Dict[str, Any]:
