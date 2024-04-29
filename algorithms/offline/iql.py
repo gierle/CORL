@@ -284,6 +284,7 @@ class GaussianPolicy(nn.Module):
         state_dim: int,
         act_dim: int,
         max_action: float,
+        min_action: float,
         hidden_dim: int = 256,
         n_hidden: int = 2,
         dropout: Optional[float] = None,
@@ -295,6 +296,7 @@ class GaussianPolicy(nn.Module):
         )
         self.log_std = nn.Parameter(torch.zeros(act_dim, dtype=torch.float32))
         self.max_action = max_action
+        self.min_action = min_action
 
     def forward(self, obs: torch.Tensor) -> Normal:
         mean = self.net(obs)
@@ -306,7 +308,7 @@ class GaussianPolicy(nn.Module):
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
         dist = self(state)
         action = dist.mean if not self.training else dist.sample()
-        action = torch.clamp(self.max_action * action, -self.max_action, self.max_action)
+        action = torch.clamp(action, self.min_action, self.max_action)
         return action.cpu().data.numpy().flatten()
 
 
@@ -316,6 +318,7 @@ class DeterministicPolicy(nn.Module):
         state_dim: int,
         act_dim: int,
         max_action: float,
+        min_action: float,
         hidden_dim: int = 256,
         n_hidden: int = 2,
         dropout: Optional[float] = None,
@@ -327,6 +330,7 @@ class DeterministicPolicy(nn.Module):
             dropout=dropout,
         )
         self.max_action = max_action
+        self.min_action = min_action
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         return self.net(obs)
@@ -335,7 +339,7 @@ class DeterministicPolicy(nn.Module):
     def act(self, state: np.ndarray, device: str = "cpu"):
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
         return (
-            torch.clamp(self(state) * self.max_action, -self.max_action, self.max_action)
+            torch.clamp(self(state), self.min_action, self.max_action)
             .cpu()
             .data.numpy()
             .flatten()
