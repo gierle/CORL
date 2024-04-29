@@ -495,16 +495,16 @@ class EDAC:
                 + 2 * self.actor.max_action * torch.rand_like(action)
             )
 
-            self.critic(state, random_actions).std(0).mean().item()
+            q_random_std = self.critic(state, random_actions).std(0).mean().item()
 
         update_info = {
-            # "alpha_loss": alpha_loss.item(),
+            "alpha_loss": alpha_loss.item(),
             "critic_loss": critic_loss.item(),
             "actor_loss": actor_loss.item(),
-            # "batch_entropy": actor_batch_entropy,
-            # "alpha": self.alpha.item(),
-            # "q_policy_std": q_policy_std,
-            # "q_random_std": q_random_std,
+            "batch_entropy": actor_batch_entropy,
+            "alpha": self.alpha.item(),
+            "q_policy_std": q_policy_std,
+            "q_random_std": q_random_std,
         }
         return update_info
 
