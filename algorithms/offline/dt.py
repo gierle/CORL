@@ -5,20 +5,18 @@ import os
 import random
 import uuid
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Union
 
-# import d4rl  # noqa
+# import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import wandb
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import IterableDataset
 from tqdm.auto import tqdm, trange  # noqa
-
 
 @dataclass
 class TrainConfig:
@@ -365,7 +363,7 @@ class DTWrapper:
         self,
         model: DecisionTransformer,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        scheduler: torch.optim.lr_scheduler._LRScheduler,
         clip_grad: Optional[float],
     ) -> None:
         self.model = model
@@ -515,7 +513,13 @@ def eval_rollout(
 #     trainloader_iter = iter(trainloader)
 #     for step in trange(config.update_steps, desc="Training"):
 #         batch = next(trainloader_iter)
-#         states, actions, returns, time_steps, mask = [b.to(config.device) for b in batch]
+#         (
+        #     states, 
+        #     actions, 
+        #     returns, 
+        #     time_steps, 
+        #     mask
+        # ) = [b.to(config.device) for b in batch]
 #         # True value indicates that the corresponding key value will be ignored
 #         padding_mask = ~mask.to(torch.bool)
 
@@ -585,7 +589,10 @@ def eval_rollout(
 #             "state_mean": dataset.state_mean,
 #             "state_std": dataset.state_std,
 #         }
-#         torch.save(checkpoint, os.path.join(config.checkpoints_path, "dt_checkpoint.pt"))
+#         torch.save(
+        #     checkpoint, 
+        #     os.path.join(config.checkpoints_path, "dt_checkpoint.pt")
+        # )
 
 
 # if __name__ == "__main__":
