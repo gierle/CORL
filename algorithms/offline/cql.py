@@ -737,6 +737,7 @@ class ContinuousCQL:
 
         log_dict.update(
             dict(
+                critic_loss=qf_loss.item(),
                 qf1_loss=qf1_loss.item(),
                 qf2_loss=qf2_loss.item(),
                 alpha=alpha.item(),
@@ -788,7 +789,7 @@ class ContinuousCQL:
 
         log_dict = dict(
             log_pi=log_pi.mean().item(),
-            policy_loss=policy_loss.item(),
+            actor_loss=policy_loss.item(),
             alpha_loss=alpha_loss.item(),
             alpha=alpha.item(),
         )
@@ -815,13 +816,8 @@ class ContinuousCQL:
 
         if self.total_it % self.target_update_period == 0:
             self.update_target_network(self.soft_target_update_rate)
-
-        standardized_log_dict = {
-            "actor_loss": policy_loss.item(),
-            "critic_loss": qf_loss.item(),
-            # "critic_loss": log_dict["qf1_loss"] + log_dict["qf2_loss"]
-        }
-        return standardized_log_dict
+        
+        return log_dict
 
     def state_dict(self) -> Dict[str, Any]:
         return {
