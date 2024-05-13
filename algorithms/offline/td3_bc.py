@@ -225,18 +225,26 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, max_action: float, activation: nn.Module):
+    def __init__(self, state_dim: int, action_dim: int, max_action: float, activation: nn.Module,
+                 hidden_dim: int=64, hidden_layers=1):
         super(Actor, self).__init__()
-        
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, 256),
-            activation(),
-            nn.Linear(256, 256),
-            activation(),
-            nn.Linear(256, action_dim),
-            activation(),
-        )
 
+        self.net = nn.Sequential(
+            *[
+                nn.Linear(state_dim, hidden_dim),
+                activation(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        activation(),
+                    )
+                ],
+                nn.Linear(hidden_dim, action_dim),
+                nn.ReLU(),
+            ]
+        )
         self.max_action = max_action
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
