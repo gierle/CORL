@@ -294,7 +294,7 @@ class ReparameterizedTanhGaussian(nn.Module):
     def log_prob(
         self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
     ) -> torch.Tensor:
-        log_std.clamp_(self.log_std_min, self.log_std_max)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
         if self.no_tanh:
             action_distribution = Normal(mean, std)
@@ -307,7 +307,7 @@ class ReparameterizedTanhGaussian(nn.Module):
     def forward(
         self, mean: torch.Tensor, log_std: torch.Tensor, deterministic: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        log_std.clamp_(self.log_std_min, self.log_std_max)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
 
         if self.no_tanh:
