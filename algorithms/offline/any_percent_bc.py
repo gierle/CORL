@@ -233,6 +233,9 @@ class Actor(nn.Module):
         hidden_dim: int,
         hidden_layers: int,
         activation: nn.Module,
+        max_action: int,
+        min_action: int,
+        tanh_scaling: bool = False,
     ):
         super(Actor, self).__init__()
 
@@ -249,12 +252,24 @@ class Actor(nn.Module):
                     )
                 ],
                 nn.Linear(hidden_dim, action_dim),
-                nn.ReLU(),
             ]
         )
+        self._max_action = max_action
+        self._min_action = min_action
+        self._tanh_scaling = tanh_scaling
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return -self.net(state)
+        action = self.net(state)
+        if self._tanh_scaling:
+            tanh_action = torch.tanh(action)
+            # instead of [-1,1] -> [self.min_action, self.max_action]
+            action = (tanh_action - 1) * (
+                (self._max_action - self._min_action) / 2
+            ) + self._max_action
+        else:
+            action = -torch.nn.functional.relu(action)
+            action.clamp_(self.min_action, self.max_action)
+        return action
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:

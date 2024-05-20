@@ -123,6 +123,7 @@ class Actor(nn.Module):
         max_log_std: float = 2.0,
         min_action: float = -1.0,
         max_action: float = 1.0,
+        tanh_scaling: bool = False,
     ):
         super().__init__()
         self._mlp = nn.Sequential(
@@ -138,7 +139,6 @@ class Actor(nn.Module):
                     )
                 ],
                 nn.Linear(hidden_dim, action_dim),
-                # nn.ReLU(),
             ]
         )
         self._log_std = nn.Parameter(torch.zeros(action_dim, dtype=torch.float32))
@@ -146,9 +146,19 @@ class Actor(nn.Module):
         self._max_log_std = max_log_std
         self._min_action = min_action
         self._max_action = max_action
+        self._tanh_scaling = tanh_scaling
 
     def _get_policy(self, state: torch.Tensor) -> torch.distributions.Distribution:
         mean = self._mlp(state)
+        if self._tanh_scaling:
+            tanh_mean = torch.tanh(mean)
+            # instead of [-1,1] -> [self.min_action, self.max_action]
+            mean = (tanh_mean - 1) * (
+                (self._max_action - self._min_action) / 2
+            ) + self._max_action
+        else:
+            mean = -torch.nn.functional.relu(mean)
+            mean.clamp_(self._min_action, self._max_action)
         log_std = self._log_std.clamp(self._min_log_std, self._max_log_std)
         policy = torch.distributions.Normal(mean, log_std.exp())
         return policy
@@ -449,9 +459,9 @@ def wandb_init(config: dict) -> None:
 #     critic_2 = Critic(**actor_critic_kwargs)
 #     critic_1.to(config.device)
 #     critic_2.to(config.device)
-#     critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), 
+#     critic_1_optimizer = torch.optim.Adam(critic_1.parameters(),
 #                                           lr=config.learning_rate)
-#     critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), 
+#     critic_2_optimizer = torch.optim.Adam(critic_2.parameters(),
 #                                           lr=config.learning_rate)
 
 #     awac = AdvantageWeightedActorCritic(

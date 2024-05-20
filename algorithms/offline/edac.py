@@ -17,6 +17,7 @@ import torch.nn as nn
 import wandb
 from torch.distributions import Normal
 
+
 @dataclass
 class TrainConfig:
     # wandb params
@@ -225,8 +226,6 @@ class Actor(nn.Module):
                         activation(),
                     )
                 ],
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
             ]
         )
         # with separate layers works better than with Linear(hidden_dim, 2 * action_dim)
@@ -264,14 +263,18 @@ class Actor(nn.Module):
         else:
             action = policy_dist.rsample()
 
-        (-action).clamp_(self.min_action, self.max_action)
         tanh_action, log_prob = torch.tanh(action), None
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
             log_prob = policy_dist.log_prob(action).sum(axis=-1)
             log_prob = log_prob - torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)
 
-        return -action, log_prob
+        # instead of [-1,1] -> [self.min_action, self.max_action]
+        scaled_action = (tanh_action - 1) * (
+            (self.max_action - self.min_action) / 2
+        ) + self.max_action
+
+        return scaled_action, log_prob
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:

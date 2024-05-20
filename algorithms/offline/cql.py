@@ -291,7 +291,6 @@ class ReparameterizedTanhGaussian(nn.Module):
         self.min_action = min_action
         self.clamp_before = clamp_before
 
-
     def log_prob(
         self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
     ) -> torch.Tensor:
@@ -320,16 +319,10 @@ class ReparameterizedTanhGaussian(nn.Module):
 
         if deterministic:
             action_sample = mean
-            # action_sample = torch.tanh(mean)
         else:
             action_sample = action_distribution.rsample()
 
-        if self.clamp_before:
-            action_sample.clamp_(self.min_action, self.max_action)
-            log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
-        else: 
-            log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
-            (-action_sample).clamp_(self.min_action, self.max_action)
+        log_prob = torch.sum(action_distribution.log_prob(action_sample), dim=-1)
 
         return action_sample, log_prob
 
@@ -344,6 +337,7 @@ class TanhGaussianPolicy(nn.Module):
         n_hidden_layers: int,
         max_action: int,
         min_action: int,
+        tanh_scaling: bool,
         log_std_multiplier: float = 1.0,
         log_std_offset: float = -1.0,
         orthogonal_init: bool = False,
@@ -355,8 +349,9 @@ class TanhGaussianPolicy(nn.Module):
         self.orthogonal_init = orthogonal_init
         self.no_tanh = no_tanh
 
-        self.max_action = max_action
-        self.min_action = min_action
+        self._max_action = max_action
+        self._min_action = min_action
+        self._tanh_scaling = tanh_scaling
 
         layers = [nn.Linear(state_dim, hidden_dim), activation()]
         for _ in range(n_hidden_layers - 1):
@@ -382,6 +377,17 @@ class TanhGaussianPolicy(nn.Module):
         base_network_output = self.base_network(observations)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
+
+        if self._tanh_scaling:
+            tanh_mean = torch.tanh(mean)
+            # instead of [-1,1] -> [self.min_action, self.max_action]
+            mean = (tanh_mean - 1) * (
+                (self._max_action - self._min_action) / 2
+            ) + self._max_action
+        else:
+            mean = -torch.nn.functional.relu(mean)
+            mean.clamp_(self._min_action, self._max_action)
+
         _, log_probs = self.tanh_gaussian(mean, log_std, False)
         return log_probs
 
@@ -396,8 +402,19 @@ class TanhGaussianPolicy(nn.Module):
         base_network_output = self.base_network(observations)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
+
+        if self._tanh_scaling:
+            tanh_mean = torch.tanh(mean)
+            # instead of [-1,1] -> [self.min_action, self.max_action]
+            mean = (tanh_mean - 1) * (
+                (self._max_action - self._min_action) / 2
+            ) + self._max_action
+        else:
+            mean = -torch.nn.functional.relu(mean)
+            mean.clamp_(self.min_action, self.max_action)
+
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
-        return -actions, log_probs
+        return actions, log_probs
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu"):
@@ -816,7 +833,7 @@ class ContinuousCQL:
 
         if self.total_it % self.target_update_period == 0:
             self.update_target_network(self.soft_target_update_rate)
-        
+
         return log_dict
 
     def state_dict(self) -> Dict[str, Any]:

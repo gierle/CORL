@@ -118,7 +118,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -285,6 +287,7 @@ class GaussianPolicy(nn.Module):
         act_dim: int,
         max_action: float,
         min_action: float,
+        tanh_scaling: bool,
         hidden_dim: int = 256,
         n_hidden: int = 2,
         dropout: Optional[float] = None,
@@ -295,11 +298,22 @@ class GaussianPolicy(nn.Module):
             output_activation_fn=nn.Tanh,
         )
         self.log_std = nn.Parameter(torch.zeros(act_dim, dtype=torch.float32))
-        self.max_action = max_action
-        self.min_action = min_action
+        self._max_action = max_action
+        self._min_action = min_action
+        self._tanh_scaling = tanh_scaling
 
     def forward(self, obs: torch.Tensor) -> Normal:
         mean = self.net(obs)
+        if self._tanh_scaling:
+            tanh_mean = torch.tanh(mean)
+            # instead of [-1,1] -> [self.min_action, self.max_action]
+            mean = (tanh_mean - 1) * (
+                (self._max_action - self._min_action) / 2
+            ) + self._max_action
+        else:
+            mean = -torch.nn.functional.relu(mean)
+            mean.clamp_(self._min_action, self._max_action)
+
         std = torch.exp(self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX))
         return Normal(mean, std)
 
@@ -308,7 +322,7 @@ class GaussianPolicy(nn.Module):
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
         dist = self(state)
         action = dist.mean if not self.training else dist.sample()
-        action = torch.clamp(action, self.min_action, self.max_action)
+        action = torch.clamp(action, self._min_action, self._max_action)
         return action.cpu().data.numpy().flatten()
 
 
@@ -319,6 +333,7 @@ class DeterministicPolicy(nn.Module):
         act_dim: int,
         max_action: float,
         min_action: float,
+        tanh_scaling: bool,
         hidden_dim: int = 256,
         n_hidden: int = 2,
         dropout: Optional[float] = None,
@@ -329,11 +344,23 @@ class DeterministicPolicy(nn.Module):
             output_activation_fn=nn.Tanh,
             dropout=dropout,
         )
-        self.max_action = max_action
-        self.min_action = min_action
+        self._max_action = max_action
+        self._min_action = min_action
+        self._tanh_scaling = tanh_scaling
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.net(obs)
+        action = self.net(obs)
+        if self._tanh_scaling:
+            tanh_action = torch.tanh(action)
+            # instead of [-1,1] -> [self.min_action, self.max_action]
+            action = (tanh_action - 1) * (
+                (self._max_action - self._min_action) / 2
+            ) + self._max_action
+        else:
+            action = -torch.nn.functional.relu(action)
+            action.clamp_(self._min_action, self._max_action)
+
+        return action
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu"):
