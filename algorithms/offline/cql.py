@@ -276,20 +276,14 @@ def init_module_weights(
 class ReparameterizedTanhGaussian(nn.Module):
     def __init__(
         self,
-        max_action: int,
-        min_action: int,
         log_std_min: float = -20.0,
         log_std_max: float = 2.0,
         no_tanh: bool = False,
-        clamp_before: bool = False,
     ):
         super().__init__()
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         self.no_tanh = no_tanh
-        self.max_action = max_action
-        self.min_action = min_action
-        self.clamp_before = clamp_before
 
     def log_prob(
         self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
@@ -366,7 +360,7 @@ class TanhGaussianPolicy(nn.Module):
         self.log_std_multiplier = Scalar(log_std_multiplier)
         self.log_std_offset = Scalar(log_std_offset)
         self.tanh_gaussian = ReparameterizedTanhGaussian(
-            max_action=max_action, min_action=min_action, no_tanh=no_tanh
+            no_tanh=no_tanh
         )
 
     def log_prob(
@@ -411,7 +405,7 @@ class TanhGaussianPolicy(nn.Module):
             ) + self._max_action
         else:
             mean = -torch.nn.functional.relu(mean)
-            mean.clamp_(self.min_action, self.max_action)
+            mean.clamp_(self._min_action, self._max_action)
 
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
         return actions, log_probs

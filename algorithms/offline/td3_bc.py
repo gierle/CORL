@@ -337,8 +337,8 @@ class TD3_BC:
         self.critic_2_target = copy.deepcopy(critic_2)
         self.critic_2_optimizer = critic_2_optimizer
 
-        self.max_action = max_action
-        self.min_action = min_action
+        self._max_action = max_action
+        self._min_action = min_action
         self.discount = discount
         self.tau = tau
         self.policy_noise = policy_noise
@@ -363,7 +363,7 @@ class TD3_BC:
             )
 
             next_action = (self.actor_target(next_state) + noise).clamp(
-                self.min_action, self.max_action
+                self._min_action, self._max_action
             )
 
             # Compute the target Q value

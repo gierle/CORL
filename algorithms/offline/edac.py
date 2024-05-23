@@ -17,7 +17,6 @@ import torch.nn as nn
 import wandb
 from torch.distributions import Normal
 
-
 @dataclass
 class TrainConfig:
     # wandb params
@@ -242,8 +241,8 @@ class Actor(nn.Module):
         torch.nn.init.uniform_(self.log_sigma.bias, -1e-3, 1e-3)
 
         self.action_dim = action_dim
-        self.max_action = max_action
-        self.min_action = min_action
+        self._max_action = max_action
+        self._min_action = min_action
 
     def forward(
         self,
@@ -271,8 +270,8 @@ class Actor(nn.Module):
 
         # instead of [-1,1] -> [self.min_action, self.max_action]
         scaled_action = (tanh_action - 1) * (
-            (self.max_action - self.min_action) / 2
-        ) + self.max_action
+            (self._max_action - self._min_action) / 2
+        ) + self._max_action
 
         return scaled_action, log_prob
 
@@ -494,8 +493,8 @@ class EDAC:
             # for logging, Q-ensemble std estimate with the random actions:
             # a ~ U[-max_action, max_action]
             random_actions = (
-                -self.actor.max_action
-                + 2 * self.actor.max_action * torch.rand_like(action)
+                -self.actor._max_action
+                + 2 * self.actor._max_action * torch.rand_like(action)
             )
 
             q_random_std = self.critic(state, random_actions).std(0).mean().item()

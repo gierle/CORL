@@ -364,7 +364,7 @@ class DeterministicPolicy(nn.Module):
     def act(self, state: np.ndarray, device: str = "cpu"):
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
         return (
-            torch.clamp(self(state), self.min_action, self.max_action)
+            torch.clamp(self(state), self._min_action, self._max_action)
             .cpu()
             .data.numpy()
             .flatten()
@@ -403,7 +403,6 @@ class ValueFunction(nn.Module):
 class ImplicitQLearning:
     def __init__(
         self,
-        max_action: float,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
         q_network: nn.Module,
@@ -417,7 +416,6 @@ class ImplicitQLearning:
         tau: float = 0.005,
         device: str = "cpu",
     ):
-        self.max_action = max_action
         self.qf = q_network
         self.q_target = copy.deepcopy(self.qf).requires_grad_(False).to(device)
         self.vf = v_network

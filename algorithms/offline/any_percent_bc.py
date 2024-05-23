@@ -268,7 +268,7 @@ class Actor(nn.Module):
             ) + self._max_action
         else:
             action = -torch.nn.functional.relu(action)
-            action.clamp_(self.min_action, self.max_action)
+            action.clamp_(self._min_action, self._max_action)
         return action
 
     @torch.no_grad()
@@ -280,8 +280,6 @@ class Actor(nn.Module):
 class BC:
     def __init__(
         self,
-        max_action: np.ndarray,
-        min_action: np.ndarray,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
         discount: float = 0.99,
@@ -289,8 +287,6 @@ class BC:
     ):
         self.actor = actor
         self.actor_optimizer = actor_optimizer
-        self.max_action = max_action
-        self.min_action = min_action
         self.discount = discount
 
         self.total_it = 0
@@ -304,7 +300,6 @@ class BC:
 
         # Compute actor loss
         pi = self.actor(state)
-        pi = pi.clamp(self.min_action, self.max_action)
 
         actor_loss = F.mse_loss(pi, action)
         log_dict["actor_loss"] = actor_loss.item()
