@@ -209,6 +209,7 @@ class Actor(nn.Module):
         hidden_dim: int,
         hidden_layers: int,
         activation: nn.Module,
+        dropout_rate: float,
         max_action: float,
         min_action: float,
     ):
@@ -217,12 +218,14 @@ class Actor(nn.Module):
             *[
                 nn.Linear(state_dim, hidden_dim),
                 activation(),
+                nn.Dropout(dropout_rate),
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         nn.Linear(hidden_dim, hidden_dim),
                         activation(),
+                        nn.Dropout(dropout_rate),
                     )
                 ],
             ]
@@ -232,7 +235,7 @@ class Actor(nn.Module):
         self.log_sigma = nn.Linear(hidden_dim, action_dim)
 
         # init as in the EDAC paper
-        for layer in self.trunk[::2]:
+        for layer in self.trunk[::3]:
             torch.nn.init.constant_(layer.bias, 0.1)
 
         torch.nn.init.uniform_(self.mu.weight, -1e-3, 1e-3)

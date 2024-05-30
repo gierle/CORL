@@ -328,6 +328,7 @@ class TanhGaussianPolicy(nn.Module):
         action_dim: int,
         hidden_dim: int,
         activation: nn.Module,
+        dropout_rate: float,
         n_hidden_layers: int,
         max_action: int,
         min_action: int,
@@ -347,10 +348,11 @@ class TanhGaussianPolicy(nn.Module):
         self._min_action = min_action
         self._tanh_scaling = tanh_scaling
 
-        layers = [nn.Linear(state_dim, hidden_dim), activation()]
+        layers = [nn.Linear(state_dim, hidden_dim), activation(), nn.Dropout(dropout_rate)]
         for _ in range(n_hidden_layers - 1):
             layers.append(nn.Linear(hidden_dim, hidden_dim))
             layers.append(activation())
+            layers.append(nn.Dropout(dropout_rate))
         layers.append(nn.Linear(hidden_dim, 2 * action_dim))
 
         self.base_network = nn.Sequential(*layers)

@@ -250,7 +250,7 @@ class MLP(nn.Module):
         activation_fn: Callable[[], nn.Module] = nn.ReLU,
         output_activation_fn: Callable[[], nn.Module] = None,
         squeeze_output: bool = False,
-        dropout: Optional[float] = None,
+        dropout_rate: Optional[float] = None,
     ):
         super().__init__()
         n_dims = len(dims)
@@ -262,8 +262,8 @@ class MLP(nn.Module):
             layers.append(nn.Linear(dims[i], dims[i + 1]))
             layers.append(activation_fn())
 
-            if dropout is not None:
-                layers.append(nn.Dropout(dropout))
+            if dropout_rate is not None:
+                layers.append(nn.Dropout(dropout_rate))
 
         layers.append(nn.Linear(dims[-2], dims[-1]))
         if output_activation_fn is not None:
@@ -288,12 +288,12 @@ class GaussianPolicy(nn.Module):
         tanh_scaling: bool,
         hidden_dim: int = 256,
         n_hidden: int = 2,
-        dropout: Optional[float] = None,
+        dropout_rate: Optional[float] = None,
     ):
         super().__init__()
         self.net = MLP(
             [state_dim, *([hidden_dim] * n_hidden), act_dim],
-            output_activation_fn=nn.Tanh,
+            dropout_rate=dropout_rate,
         )
         self.log_std = nn.Parameter(torch.zeros(act_dim, dtype=torch.float32))
         self._max_action = max_action
@@ -334,13 +334,12 @@ class DeterministicPolicy(nn.Module):
         tanh_scaling: bool,
         hidden_dim: int = 256,
         n_hidden: int = 2,
-        dropout: Optional[float] = None,
+        dropout_rate: Optional[float] = None,
     ):
         super().__init__()
         self.net = MLP(
             [state_dim, *([hidden_dim] * n_hidden), act_dim],
-            output_activation_fn=nn.Tanh,
-            dropout=dropout,
+            dropout_rate=dropout_rate,
         )
         self._max_action = max_action
         self._min_action = min_action
