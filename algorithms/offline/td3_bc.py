@@ -233,12 +233,14 @@ class Actor(nn.Module):
             *[
                 nn.Linear(state_dim, hidden_dim),
                 activation(),
+                nn.Dropout(0.2),
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         nn.Linear(hidden_dim, hidden_dim),
                         activation(),
+                        nn.Dropout(0.2),
                     )
                 ],
                 nn.Linear(hidden_dim, action_dim),
