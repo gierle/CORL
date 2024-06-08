@@ -226,21 +226,21 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
 
 class Actor(nn.Module):
     def __init__(self, state_dim: int, action_dim: int, max_action: float, activation: nn.Module,
-                 hidden_dim: int=64, hidden_layers=1, initialization=None):
+                 hidden_dim: int=64, hidden_layers=1, dropout_rate=0.2, initialization=None):
         super(Actor, self).__init__()
 
         self.net = nn.Sequential(
             *[
                 nn.Linear(state_dim, hidden_dim),
                 activation(),
-                nn.Dropout(0.2),
+                nn.Dropout(dropout_rate),
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         nn.Linear(hidden_dim, hidden_dim),
                         activation(),
-                        nn.Dropout(0.2),
+                        nn.Dropout(dropout_rate),
                     )
                 ],
                 nn.Linear(hidden_dim, action_dim),
