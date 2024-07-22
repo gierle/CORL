@@ -190,7 +190,7 @@ def eval_actor(
 
 
 def keep_best_trajectories(
-    dataset: Dict[str, np.ndarray],
+    replay_buffer: ReplayBuffer,
     frac: float,
     discount: float,
     max_episode_steps: int = 1000,
@@ -200,7 +200,12 @@ def keep_best_trajectories(
     cur_ids = []
     cur_return = 0
     reward_scale = 1.0
-    for i, (reward, done) in enumerate(zip(dataset["rewards"], dataset["terminals"])):
+
+    # Convert tensors to numpy for easy manipulation
+    rewards = replay_buffer._rewards.cpu().numpy().flatten()
+    dones = replay_buffer._dones.cpu().numpy().flatten()
+
+    for i, (reward, done) in enumerate(zip(rewards, dones)):
         cur_return += reward_scale * reward
         cur_ids.append(i)
         reward_scale *= discount
@@ -211,6 +216,7 @@ def keep_best_trajectories(
             cur_return = 0
             reward_scale = 1.0
 
+    # Sort trajectories by their returns
     sort_ord = np.argsort(returns, axis=0)[::-1].reshape(-1)
     top_trajs = sort_ord[: max(1, int(frac * len(sort_ord)))]
 
@@ -218,11 +224,20 @@ def keep_best_trajectories(
     for i in top_trajs:
         order += ids_by_trajectories[i]
     order = np.array(order)
-    dataset["observations"] = dataset["observations"][order]
-    dataset["actions"] = dataset["actions"][order]
-    dataset["next_observations"] = dataset["next_observations"][order]
-    dataset["rewards"] = dataset["rewards"][order]
-    dataset["terminals"] = dataset["terminals"][order]
+
+    # Filter the replay buffer to keep only the top trajectories
+    replay_buffer._states = replay_buffer._states[order]
+    replay_buffer._actions = replay_buffer._actions[order]
+    replay_buffer._next_states = replay_buffer._next_states[order]
+    replay_buffer._rewards = replay_buffer._rewards[order]
+    replay_buffer._dones = replay_buffer._dones[order]
+
+    # Update size and pointer
+    replay_buffer._size = len(order)
+    replay_buffer._pointer = replay_buffer._size % replay_buffer._buffer_size
+    
+    return replay_buffer
+
 
 
 class Actor(nn.Module):
