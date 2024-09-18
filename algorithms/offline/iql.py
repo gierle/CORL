@@ -289,6 +289,7 @@ class GaussianPolicy(nn.Module):
         hidden_dim: int = 256,
         n_hidden: int = 2,
         dropout_rate: Optional[float] = None,
+        action_positive: bool = False,
     ):
         super().__init__()
         self.net = MLP(
@@ -299,6 +300,7 @@ class GaussianPolicy(nn.Module):
         self._max_action = max_action
         self._min_action = min_action
         self._tanh_scaling = tanh_scaling
+        self._pos_act = action_positive
 
     def forward(self, obs: torch.Tensor) -> Normal:
         mean = self.net(obs)
@@ -309,8 +311,11 @@ class GaussianPolicy(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            mean = -torch.nn.functional.relu(mean)
-            mean.clamp_(self._min_action, self._max_action)
+            relu_mean = torch.nn.functional.relu(mean)
+            if not self._pos_act:
+                relu_mean.mul_(-1)
+            relu_mean.clamp_(self._min_action, self._max_action)
+            mean = relu_mean
 
         std = torch.exp(self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX))
         return Normal(mean, std)
@@ -354,8 +359,11 @@ class DeterministicPolicy(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            action = -torch.nn.functional.relu(action)
-            action.clamp_(self._min_action, self._max_action)
+            relu_action = torch.nn.functional.relu(action)
+            if not self._pos_act:
+                relu_action.mul_(-1)
+            relu_action.clamp_(self._min_action, self._max_action)
+            action = relu_action
 
         return action
 

@@ -337,6 +337,7 @@ class TanhGaussianPolicy(nn.Module):
         log_std_offset: float = -1.0,
         orthogonal_init: bool = False,
         no_tanh: bool = False,
+        action_positive: bool = False,
     ) -> None:
         super().__init__()
         self.observation_dim = state_dim
@@ -347,6 +348,7 @@ class TanhGaussianPolicy(nn.Module):
         self._max_action = max_action
         self._min_action = min_action
         self._tanh_scaling = tanh_scaling
+        self._pos_act = action_positive
 
         layers = [nn.Linear(state_dim, hidden_dim), activation(), nn.Dropout(dropout_rate)]
         for _ in range(n_hidden_layers - 1):
@@ -381,7 +383,9 @@ class TanhGaussianPolicy(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            mean = -torch.nn.functional.relu(mean)
+            mean = torch.nn.functional.relu(mean)
+            if not self._pos_act:
+                mean.mul_(-1)
             mean.clamp_(self._min_action, self._max_action)
 
         _, log_probs = self.tanh_gaussian(mean, log_std, False)
@@ -406,7 +410,9 @@ class TanhGaussianPolicy(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            mean = -torch.nn.functional.relu(mean)
+            mean = torch.nn.functional.relu(mean)
+            if not self._pos_act:
+                mean.mul_(-1)
             mean.clamp_(self._min_action, self._max_action)
 
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)

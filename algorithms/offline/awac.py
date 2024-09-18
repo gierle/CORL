@@ -125,6 +125,7 @@ class Actor(nn.Module):
         min_action: float = -1.0,
         max_action: float = 1.0,
         tanh_scaling: bool = False,
+        action_positive: bool = False,
     ):
         super().__init__()
         self._mlp = nn.Sequential(
@@ -150,6 +151,7 @@ class Actor(nn.Module):
         self._min_action = min_action
         self._max_action = max_action
         self._tanh_scaling = tanh_scaling
+        self._pos_act = action_positive
 
     def _get_policy(self, state: torch.Tensor) -> torch.distributions.Distribution:
         mean = self._mlp(state)
@@ -160,8 +162,11 @@ class Actor(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            mean = -torch.nn.functional.relu(mean)
-            mean.clamp_(self._min_action, self._max_action)
+            relu_mean = torch.nn.functional.relu(mean)
+            if not self._pos_act:
+                relu_mean.mul_(-1)
+            relu_mean.clamp_(self._min_action, self._max_action)
+            mean = relu_mean
         log_std = self._log_std.clamp(self._min_log_std, self._max_log_std)
         policy = torch.distributions.Normal(mean, log_std.exp())
         return policy

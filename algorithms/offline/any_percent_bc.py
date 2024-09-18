@@ -252,6 +252,7 @@ class Actor(nn.Module):
         max_action: int,
         min_action: int,
         tanh_scaling: bool = False,
+        action_positive: bool = False,
     ):
         super(Actor, self).__init__()
 
@@ -275,6 +276,7 @@ class Actor(nn.Module):
         self._max_action = max_action
         self._min_action = min_action
         self._tanh_scaling = tanh_scaling
+        self._pos_act = action_positive
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         action = self.net(state)
@@ -285,8 +287,11 @@ class Actor(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            action = -torch.nn.functional.relu(action)
-            action.clamp_(self._min_action, self._max_action)
+            relu_action = torch.nn.functional.relu(action)
+            if not self._pos_act:
+                relu_action.mul_(-1)
+            relu_action.clamp_(self._min_action, self._max_action)
+            action = relu_action
         return action
 
     @torch.no_grad()
