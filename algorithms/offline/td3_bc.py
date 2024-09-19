@@ -229,7 +229,6 @@ class Actor(nn.Module):
         action_dim: int,
         hidden_dim: int,
         hidden_layers: int,
-        activation: nn.Module,
         dropout_rate: float,
         max_action: int,
         min_action: int,
@@ -241,14 +240,14 @@ class Actor(nn.Module):
         self.net = nn.Sequential(
             *[
                 nn.Linear(state_dim, hidden_dim),
-                activation(),
+                nn.ReLU(),
                 nn.Dropout(dropout_rate),
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         nn.Linear(hidden_dim, hidden_dim),
-                        activation(),
+                        nn.ReLU(),
                         nn.Dropout(dropout_rate),
                     )
                 ],
@@ -291,20 +290,19 @@ class Critic(nn.Module):
         action_dim: int,
         hidden_dim: int,
         hidden_layers: int,
-        activation: nn.Module,
     ):
         super(Critic, self).__init__()
 
         self.net = nn.Sequential(
             *[
                 nn.Linear(state_dim + action_dim, hidden_dim),
-                activation(),
+                nn.ReLU(),
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         nn.Linear(hidden_dim, hidden_dim),
-                        activation(),
+                        nn.ReLU(),
                     )
                 ],
                 nn.Linear(hidden_dim, 1),

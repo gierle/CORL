@@ -212,7 +212,6 @@ class Actor(nn.Module):
         action_dim: int,
         hidden_dim: int,
         hidden_layers: int,
-        activation: nn.Module,
         dropout_rate: float,
         edac_init: bool,
         max_action: float,
@@ -222,14 +221,14 @@ class Actor(nn.Module):
         self.trunk = nn.Sequential(
             *[
                 nn.Linear(state_dim, hidden_dim),
-                activation(),
+                nn.ReLU(),
                 nn.Dropout(dropout_rate),           
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         nn.Linear(hidden_dim, hidden_dim),
-                        activation(),
+                        nn.ReLU(),
                         nn.Dropout(dropout_rate),           
                     )
                 ],
@@ -299,7 +298,6 @@ class VectorizedCritic(nn.Module):
         action_dim: int,
         hidden_dim: int,
         hidden_layers: int,
-        activation: nn.Module,
         num_critics: int,
         layernorm: bool,
         edac_init: bool,
@@ -309,14 +307,14 @@ class VectorizedCritic(nn.Module):
             *[
                 VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
                 nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
-                activation(),
+                nn.ReLU(),
                 *[
                     module
                     for _ in range(hidden_layers)
                     for module in (
                         VectorizedLinear(hidden_dim, hidden_dim, num_critics),
                         nn.LayerNorm(hidden_dim) if layernorm else nn.Identity(),
-                        activation(),
+                        nn.ReLU(),
                     )
                 ],
                 VectorizedLinear(hidden_dim, 1, num_critics),
