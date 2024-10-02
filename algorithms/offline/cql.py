@@ -382,9 +382,11 @@ class TanhGaussianPolicy(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            mean = torch.nn.functional.relu(mean)
-            if not self._pos_act:
-                mean.mul_(-1)
+            # Have to do it this way to avoid in-place operation
+            if self._pos_act:
+                mean = torch.nn.functional.relu(mean)
+            else:
+                mean = - torch.nn.functional.relu(mean)
             mean.clamp_(self._min_action, self._max_action)
 
         _, log_probs = self.tanh_gaussian(mean, log_std, False)
@@ -409,9 +411,11 @@ class TanhGaussianPolicy(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            mean = torch.nn.functional.relu(mean)
-            if not self._pos_act:
-                mean.mul_(-1)
+            # Have to do it this way to avoid in-place operation
+            if self._pos_act:
+                mean = torch.nn.functional.relu(mean)
+            else:
+                mean = - torch.nn.functional.relu(mean)
             mean.clamp_(self._min_action, self._max_action)
 
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
