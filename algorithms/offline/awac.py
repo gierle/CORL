@@ -161,9 +161,11 @@ class Actor(nn.Module):
                 (self._max_action - self._min_action) / 2
             ) + self._max_action
         else:
-            relu_mean = torch.nn.functional.relu(mean)
-            if not self._pos_act:
-                relu_mean.mul_(-1)
+            # Have to do it this way to avoid in-place operation
+            if self._pos_act:
+                relu_mean = torch.nn.functional.relu(mean)
+            else:
+                relu_mean = - torch.nn.functional.relu(mean)
             relu_mean.clamp_(self._min_action, self._max_action)
             mean = relu_mean
         log_std = self._log_std.clamp(self._min_log_std, self._max_log_std)
