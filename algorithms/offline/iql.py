@@ -14,10 +14,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
+from torch import Tensor
 from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-TensorBatch = List[torch.Tensor]
+TensorBatch = List[Tensor]
 
 
 EXP_ADV_MAX = 100.0
@@ -55,13 +56,13 @@ class TrainConfig:
     group: str = "IQL-D4RL"
     name: str = "IQL"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
@@ -72,8 +73,10 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
     return mean, std
 
 
-def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
-    return (states - mean) / std
+def normalize_states(
+    states: np.ndarray, mean: np.ndarray, std: np.ndarray
+) -> np.ndarray:
+    return (states - mean) / std  # type: ignore
 
 
 def wrap_env(
@@ -83,12 +86,12 @@ def wrap_env(
     reward_scale: float = 1.0,
 ) -> gym.Env:
     # PEP 8: E731 do not assign a lambda expression, use a def
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (
             state - state_mean
         ) / state_std  # epsilon should be already added in std.
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         # Please be careful, here reward is multiplied by scale!
         return reward_scale * reward
 
@@ -125,11 +128,11 @@ class ReplayBuffer:
         self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
 
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+    def _to_tensor(self, data: np.ndarray) -> Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
     # Loads data in d4rl format, i.e. from Dict[str, np.array].
-    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
+    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]) -> None:
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
         n_transitions = data["observations"].shape[0]
@@ -148,7 +151,9 @@ class ReplayBuffer:
         print(f"Dataset size: {n_transitions}")
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        indices = np.random.randint(
+            0, min(self._size, self._pointer), size=batch_size
+        ).item()
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
@@ -156,7 +161,7 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self):
+    def add_transition(self) -> None:
         # Use this method to add new data into the replay buffer during fine-tuning.
         # I left it unimplemented since now we do not do fine-tuning.
         raise NotImplementedError
@@ -164,7 +169,7 @@ class ReplayBuffer:
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         env.seed(seed)
         env.action_space.seed(seed)
@@ -176,17 +181,17 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
 ) -> np.ndarray:
@@ -197,7 +202,7 @@ def eval_actor(
         state, done = env.reset(), False
         episode_reward = 0.0
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, _ = env.step(action)
             episode_reward += reward
         episode_rewards.append(episode_reward)
@@ -206,7 +211,7 @@ def eval_actor(
     return np.asarray(episode_rewards)
 
 
-def return_reward_range(dataset, max_episode_steps):
+def return_reward_range(dataset: dict, max_episode_steps: int) -> tuple[float, float]:
     returns, lengths = [], []
     ep_ret, ep_len = 0.0, 0
     for r, d in zip(dataset["rewards"], dataset["terminals"]):
@@ -221,7 +226,9 @@ def return_reward_range(dataset, max_episode_steps):
     return min(returns), max(returns)
 
 
-def modify_reward(dataset, env_name, max_episode_steps=1000):
+def modify_reward(
+    dataset: dict, env_name: list[str], max_episode_steps: int = 1000
+) -> None:
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
         min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
         dataset["rewards"] /= max_ret - min_ret
@@ -230,34 +237,34 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
         dataset["rewards"] -= 1.0
 
 
-def asymmetric_l2_loss(u: torch.Tensor, tau: float) -> torch.Tensor:
+def asymmetric_l2_loss(u: Tensor, tau: float) -> Tensor:
     return torch.mean(torch.abs(tau - (u < 0).float()) * u**2)
 
 
 class Squeeze(nn.Module):
-    def __init__(self, dim=-1):
+    def __init__(self, dim: int = -1) -> None:
         super().__init__()
         self.dim = dim
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         return x.squeeze(dim=self.dim)
 
 
 class MLP(nn.Module):
     def __init__(
         self,
-        dims,
+        dims: list[int],
         activation_fn: Callable[[], nn.Module] = nn.ReLU,
-        output_activation_fn: Callable[[], nn.Module] = None,
+        output_activation_fn: Optional[Callable[[], nn.Module]] = None,
         squeeze_output: bool = False,
         dropout_rate: Optional[float] = None,
-    ):
+    ) -> None:
         super().__init__()
         n_dims = len(dims)
         if n_dims < 2:
             raise ValueError("MLP requires at least two dims (input and output)")
 
-        layers = []
+        layers: list[nn.Module] = []
         for i in range(n_dims - 2):
             layers.append(nn.Linear(dims[i], dims[i + 1]))
             layers.append(activation_fn())
@@ -274,8 +281,8 @@ class MLP(nn.Module):
             layers.append(Squeeze(-1))
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+    def forward(self, x: Tensor) -> Tensor:
+        return self.net(x)  # type: ignore
 
 
 class GaussianPolicy(nn.Module):
@@ -302,7 +309,7 @@ class GaussianPolicy(nn.Module):
         self._tanh_scaling = tanh_scaling
         self._pos_act = action_positive
 
-    def forward(self, obs: torch.Tensor) -> Normal:
+    def forward(self, obs: Tensor) -> Normal:
         mean = self.net(obs)
         if self._tanh_scaling:
             tanh_mean = torch.tanh(mean)
@@ -315,20 +322,20 @@ class GaussianPolicy(nn.Module):
             if self._pos_act:
                 relu_mean = torch.nn.functional.relu(mean)
             else:
-                relu_mean = - torch.nn.functional.relu(mean)
+                relu_mean = -torch.nn.functional.relu(mean)
             relu_mean.clamp_(self._min_action, self._max_action)
             mean = relu_mean
 
         std = torch.exp(self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX))
         return Normal(mean, std)
 
-    @torch.no_grad()
-    def act(self, state: np.ndarray, device: str = "cpu") -> np.float64:
-        state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
+    @torch.no_grad()  # type: ignore
+    def act(self, _state: np.ndarray, device: str = "cpu") -> np.float64:
+        state = torch.tensor(_state.reshape(1, -1), device=device, dtype=torch.float32)
         dist = self(state)
         action = dist.mean if not self.training else dist.sample()
         action = torch.clamp(action, self._min_action, self._max_action)
-        return action.cpu().data.numpy().flatten()
+        return action.cpu().data.numpy().flatten()  # type: ignore
 
 
 class DeterministicPolicy(nn.Module):
@@ -352,8 +359,8 @@ class DeterministicPolicy(nn.Module):
         self._min_action = min_action
         self._tanh_scaling = tanh_scaling
 
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        action = self.net(obs)
+    def forward(self, obs: Tensor) -> Tensor:
+        action: Tensor = self.net(obs)
         if self._tanh_scaling:
             tanh_action = torch.tanh(action)
             # instead of [-1,1] -> [self.min_action, self.max_action]
@@ -365,15 +372,15 @@ class DeterministicPolicy(nn.Module):
             if self._pos_act:
                 relu_action = torch.nn.functional.relu(action)
             else:
-                relu_action = - torch.nn.functional.relu(action)
+                relu_action = -torch.nn.functional.relu(action)
             relu_action.clamp_(self._min_action, self._max_action)
             action = relu_action
 
         return action
 
-    @torch.no_grad()
-    def act(self, state: np.ndarray, device: str = "cpu"):
-        state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
+    @torch.no_grad()  # type: ignore
+    def act(self, _state: np.ndarray, device: str = "cpu"):
+        state = torch.tensor(_state.reshape(1, -1), device=device, dtype=torch.float32)
         return (
             torch.clamp(self(state), self._min_action, self._max_action)
             .cpu()
@@ -391,13 +398,11 @@ class TwinQ(nn.Module):
         self.q1 = MLP(dims, squeeze_output=True)
         self.q2 = MLP(dims, squeeze_output=True)
 
-    def both(
-        self, state: torch.Tensor, action: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def both(self, state: Tensor, action: Tensor) -> Tuple[Tensor, Tensor]:
         sa = torch.cat([state, action], 1)
         return self.q1(sa), self.q2(sa)
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    def forward(self, state: Tensor, action: Tensor) -> Tensor:
         return torch.min(*self.both(state, action))
 
 
@@ -407,8 +412,8 @@ class ValueFunction(nn.Module):
         dims = [state_dim, *([hidden_dim] * n_hidden), 1]
         self.v = MLP(dims, squeeze_output=True)
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return self.v(state)
+    def forward(self, state: Tensor) -> Tensor:
+        return self.v(state)  # type: ignore
 
 
 class ImplicitQLearning:
@@ -443,13 +448,15 @@ class ImplicitQLearning:
         self.total_it = 0
         self.device = device
 
-    def _update_v(self, observations, actions, log_dict) -> torch.Tensor:
+    def _update_v(
+        self, observations: Tensor, actions: Tensor, log_dict: dict
+    ) -> Tensor:
         # Update value function
         with torch.no_grad():
             target_q = self.q_target(observations, actions)
 
         v = self.vf(observations)
-        adv = target_q - v
+        adv: Tensor = target_q - v
         v_loss = asymmetric_l2_loss(adv, self.iql_tau)
         log_dict["value_loss"] = v_loss.item()
         self.v_optimizer.zero_grad()
@@ -459,16 +466,17 @@ class ImplicitQLearning:
 
     def _update_q(
         self,
-        next_v: torch.Tensor,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
-        rewards: torch.Tensor,
-        terminals: torch.Tensor,
+        next_v: Tensor,
+        observations: Tensor,
+        actions: Tensor,
+        rewards: Tensor,
+        terminals: Tensor,
         log_dict: Dict,
-    ):
+    ) -> None:
         targets = rewards + (1.0 - terminals.float()) * self.discount * next_v.detach()
-        qs = self.qf.both(observations, actions)
-        q_loss = sum(F.mse_loss(q, targets) for q in qs) / len(qs)
+        qs = self.qf.both(observations, actions)  # type: ignore
+        q_loss: Tensor = \
+            sum(F.mse_loss(q, targets) for q in qs) / len(qs)  # type: ignore
         log_dict["q_loss"] = q_loss.item()
         self.q_optimizer.zero_grad()
         q_loss.backward()
@@ -479,11 +487,11 @@ class ImplicitQLearning:
 
     def _update_policy(
         self,
-        adv: torch.Tensor,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
+        adv: Tensor,
+        observations: Tensor,
+        actions: Tensor,
         log_dict: Dict,
-    ):
+    ) -> None:
         exp_adv = torch.exp(self.beta * adv.detach()).clamp(max=EXP_ADV_MAX)
         policy_out = self.actor(observations)
         if isinstance(policy_out, torch.distributions.Distribution):
@@ -510,20 +518,20 @@ class ImplicitQLearning:
             next_observations,
             dones,
         ) = batch
-        log_dict = {}
+        logs: dict = {}
 
         with torch.no_grad():
             next_v = self.vf(next_observations)
         # Update value function
-        adv = self._update_v(observations, actions, log_dict)
+        adv = self._update_v(observations, actions, logs)
         rewards = rewards.squeeze(dim=-1)
         dones = dones.squeeze(dim=-1)
         # Update Q function
-        self._update_q(next_v, observations, actions, rewards, dones, log_dict)
+        self._update_q(next_v, observations, actions, rewards, dones, logs)
         # Update actor
-        self._update_policy(adv, observations, actions, log_dict)
+        self._update_policy(adv, observations, actions, logs)
 
-        return log_dict
+        return logs
 
     def state_dict(self) -> Dict[str, Any]:
         return {
@@ -537,7 +545,7 @@ class ImplicitQLearning:
             "total_it": self.total_it,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.qf.load_state_dict(state_dict["qf"])
         self.q_optimizer.load_state_dict(state_dict["q_optimizer"])
         self.q_target = copy.deepcopy(self.qf)

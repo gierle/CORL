@@ -11,8 +11,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
+from torch import Tensor
 
-TensorBatch = List[torch.Tensor]
+TensorBatch = List[Tensor]
 
 
 @dataclass
@@ -38,13 +39,13 @@ class TrainConfig:
     group: str = "BC-D4RL"
     name: str = "BC"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
@@ -55,8 +56,10 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
     return mean, std
 
 
-def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
-    return (states - mean) / std
+def normalize_states(
+    states: np.ndarray, mean: np.ndarray, std: np.ndarray
+) -> np.ndarray:
+    return (states - mean) / std  # type: ignore
 
 
 def wrap_env(
@@ -66,12 +69,12 @@ def wrap_env(
     reward_scale: float = 1.0,
 ) -> gym.Env:
     # PEP 8: E731 do not assign a lambda expression, use a def
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (
             state - state_mean
         ) / state_std  # epsilon should be already added in std.
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         # Please be careful, here reward is multiplied by scale!
         return reward_scale * reward
 
@@ -108,11 +111,11 @@ class ReplayBuffer:
         self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
 
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+    def _to_tensor(self, data: np.ndarray) -> Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
     # Loads data in d4rl format, i.e. from Dict[str, np.array].
-    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
+    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]) -> None:
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
         n_transitions = data["observations"].shape[0]
@@ -131,7 +134,9 @@ class ReplayBuffer:
         print(f"Dataset size: {n_transitions}")
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        indices = np.random.randint(
+            0, min(self._size, self._pointer), size=batch_size
+        ).item()
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
@@ -139,7 +144,7 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self):
+    def add_transition(self) -> None:
         # Use this method to add new data into the replay buffer during fine-tuning.
         # I left it unimplemented since now we do not do fine-tuning.
         raise NotImplementedError
@@ -147,7 +152,7 @@ class ReplayBuffer:
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         env.seed(seed)
         env.action_space.seed(seed)
@@ -159,17 +164,17 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
 ) -> np.ndarray:
@@ -180,7 +185,7 @@ def eval_actor(
         state, done = env.reset(), False
         episode_reward = 0.0
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, _ = env.step(action)
             episode_reward += reward
         episode_rewards.append(episode_reward)
@@ -194,7 +199,7 @@ def keep_best_trajectories(
     frac: float,
     discount: float,
     max_episode_steps: int = 1000,
-):
+) -> ReplayBuffer:
     ids_by_trajectories = []
     returns = []
     cur_ids = []
@@ -223,7 +228,6 @@ def keep_best_trajectories(
     order = []
     for i in top_trajs:
         order += ids_by_trajectories[i]
-    order = np.array(order)
 
     # Filter the replay buffer to keep only the top trajectories
     replay_buffer._states = replay_buffer._states[order]
@@ -235,9 +239,8 @@ def keep_best_trajectories(
     # Update size and pointer
     replay_buffer._size = len(order)
     replay_buffer._pointer = replay_buffer._size % replay_buffer._buffer_size
-    
-    return replay_buffer
 
+    return replay_buffer
 
 
 class Actor(nn.Module):
@@ -277,8 +280,8 @@ class Actor(nn.Module):
         self._tanh_scaling = tanh_scaling
         self._pos_act = action_positive
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        action = self.net(state)
+    def forward(self, state: Tensor) -> Tensor:
+        action: Tensor = self.net(state)
         if self._tanh_scaling:
             tanh_action = torch.tanh(action)
             # instead of [-1,1] -> [self.min_action, self.max_action]
@@ -290,15 +293,15 @@ class Actor(nn.Module):
             if self._pos_act:
                 relu_action = torch.nn.functional.relu(action)
             else:
-                relu_action = - torch.nn.functional.relu(action)
+                relu_action = -torch.nn.functional.relu(action)
             relu_action.clamp_(self._min_action, self._max_action)
             action = relu_action
         return action
 
-    @torch.no_grad()
-    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
-        state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
-        return self(state).cpu().data.numpy().flatten()
+    @torch.no_grad()  # type: ignore
+    def act(self, _state: np.ndarray, device: str = "cpu") -> np.ndarray:
+        state = torch.tensor(_state.reshape(1, -1), device=device, dtype=torch.float32)
+        return self(state).cpu().data.numpy().flatten()  # type: ignore
 
 
 class BC:
@@ -341,7 +344,7 @@ class BC:
             "total_it": self.total_it,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.actor.load_state_dict(state_dict["actor"])
         self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
         self.total_it = state_dict["total_it"]

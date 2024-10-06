@@ -6,7 +6,7 @@ import random
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Union
+from typing import Any, DefaultDict, Dict, Generator, List, Optional, Tuple, Union
 
 # import d4rl
 import gym
@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import wandb
+from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import IterableDataset
 from tqdm.auto import tqdm, trange  # noqa
@@ -56,7 +57,7 @@ class TrainConfig:
     eval_seed: int = 42
     device: str = "cuda"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
@@ -65,7 +66,7 @@ class TrainConfig:
 # general utils
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         env.seed(seed)
         env.action_space.seed(seed)
@@ -77,14 +78,14 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 def wrap_env(
@@ -93,10 +94,10 @@ def wrap_env(
     state_std: Union[np.ndarray, float] = 1.0,
     reward_scale: float = 1.0,
 ) -> gym.Env:
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (state - state_mean) / state_std
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         return reward_scale * reward
 
     env = gym.wrappers.TransformObservation(env, normalize_state)
@@ -190,7 +191,7 @@ class SequenceDataset(IterableDataset):
 
         return states, actions, returns, time_steps, mask
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[Any, Any, Any]:
         while True:
             traj_idx = np.random.choice(len(self.dataset), p=self.sample_prob)
             start_idx = random.randint(
@@ -231,8 +232,8 @@ class TransformerBlock(nn.Module):
 
     # [batch_size, seq_len, emb_dim] -> [batch_size, seq_len, emb_dim]
     def forward(
-        self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+        self, x: Tensor, padding_mask: Optional[Tensor] = None
+    ) -> Tensor:
         causal_mask = self.causal_mask[: x.shape[1], : x.shape[1]]
 
         norm_x = self.norm1(x)
@@ -305,7 +306,7 @@ class DecisionTransformer(nn.Module):
         self.apply(self._init_weights)
 
     @staticmethod
-    def _init_weights(module: nn.Module):
+    def _init_weights(module: nn.Module) -> None:
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
@@ -316,11 +317,11 @@ class DecisionTransformer(nn.Module):
 
     def forward(
         self,
-        states: torch.Tensor,  # [batch_size, seq_len, state_dim]
-        actions: torch.Tensor,  # [batch_size, seq_len, action_dim]
-        returns_to_go: torch.Tensor,  # [batch_size, seq_len]
-        time_steps: torch.Tensor,  # [batch_size, seq_len]
-        padding_mask: Optional[torch.Tensor] = None,  # [batch_size, seq_len]
+        states: Tensor,  # [batch_size, seq_len, state_dim]
+        actions: Tensor,  # [batch_size, seq_len, action_dim]
+        returns_to_go: Tensor,  # [batch_size, seq_len]
+        time_steps: Tensor,  # [batch_size, seq_len]
+        padding_mask: Optional[Tensor] = None,  # [batch_size, seq_len]
     ) -> torch.FloatTensor:
         batch_size, seq_len = states.shape[0], states.shape[1]
         # [batch_size, seq_len, emb_dim]
@@ -373,7 +374,7 @@ class DTWrapper:
 
         self.total_it = 0
 
-    def train(self, batch: List[torch.Tensor]) -> Dict[str, float]:
+    def train(self, batch: List[Tensor]) -> Dict[str, float]:
         self.total_it += 1
         (
             states,
@@ -404,7 +405,7 @@ class DTWrapper:
 
 
 # Training and evaluation logic
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_rollout(
     model: DecisionTransformer,
     env: gym.Env,

@@ -70,13 +70,13 @@ class TrainConfig:
     group: str = "CQL-D4RL"
     name: str = "CQL"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
@@ -87,8 +87,10 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
     return mean, std
 
 
-def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
-    return (states - mean) / std
+def normalize_states(
+    states: np.ndarray, mean: np.ndarray, std: np.ndarray
+) -> np.ndarray:
+    return (states - mean) / std  # type: ignore
 
 
 def wrap_env(
@@ -98,7 +100,7 @@ def wrap_env(
     reward_scale: float = 1.0,
 ) -> gym.Env:
     # PEP 8: E731 do not assign a lambda expression, use a def
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (
             state - state_mean
         ) / state_std  # epsilon should be already added in std.
@@ -131,7 +133,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -195,7 +199,7 @@ def set_env_seed(env: Optional[gym.Env], seed: int):
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         set_env_seed(env, seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -206,14 +210,14 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 def is_goal_reached(reward: float, info: Dict) -> bool:
@@ -222,7 +226,7 @@ def is_goal_reached(reward: float, info: Dict) -> bool:
     return reward > 0  # Assuming that reaching target is a positive reward
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -235,7 +239,7 @@ def eval_actor(
         episode_reward = 0.0
         goal_achieved = False
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, env_infos = env.step(action)
             episode_reward += reward
             if not goal_achieved:
@@ -313,7 +317,10 @@ def init_module_weights(module: torch.nn.Module, orthogonal_init: bool = False):
 
 class ReparameterizedTanhGaussian(nn.Module):
     def __init__(
-        self, log_std_min: float = -20.0, log_std_max: float = 2.0, no_tanh: bool = False
+        self,
+        log_std_min: float = -20.0,
+        log_std_max: float = 2.0,
+        no_tanh: bool = False,
     ):
         super().__init__()
         self.log_std_min = log_std_min
@@ -418,7 +425,7 @@ class TanhGaussianPolicy(nn.Module):
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
         return self.max_action * actions, log_probs
 
-    @torch.no_grad()
+    @torch.no_grad()  # type: ignore
     def act(self, state: np.ndarray, device: str = "cpu"):
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
         with torch.no_grad():
@@ -455,7 +462,9 @@ class FullyConnectedQFunction(nn.Module):
         else:
             init_module_weights(self.network[-1], False)
 
-    def forward(self, observations: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, observations: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
         multiple_actions = False
         batch_size = observations.shape[0]
         if actions.ndim == 3 and observations.ndim == 2:
@@ -851,7 +860,7 @@ class ContinuousCQL:
             "total_it": self.total_it,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.actor.load_state_dict(state_dict=state_dict["actor"])
         self.critic_1.load_state_dict(state_dict=state_dict["critic1"])
         self.critic_2.load_state_dict(state_dict=state_dict["critic2"])

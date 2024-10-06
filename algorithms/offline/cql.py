@@ -14,9 +14,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from torch.distributions import Normal, TanhTransform, TransformedDistribution
+from torch import Tensor
+from torch.distributions import (
+    Distribution,
+    Normal,
+    TanhTransform,
+    TransformedDistribution,
+)
 
-TensorBatch = List[torch.Tensor]
+TensorBatch = List[Tensor]
 
 
 @dataclass
@@ -87,7 +93,7 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
 
 
 def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray) -> Any:
-    return (states - mean) / std
+    return (states - mean) / std  # type: ignore
 
 
 def wrap_env(
@@ -97,12 +103,12 @@ def wrap_env(
     reward_scale: float = 1.0,
 ) -> gym.Env:
     # PEP 8: E731 do not assign a lambda expression, use a def
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (
             state - state_mean
         ) / state_std  # epsilon should be already added in std.
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         # Please be careful, here reward is multiplied by scale!
         return reward_scale * reward
 
@@ -139,11 +145,11 @@ class ReplayBuffer:
         self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
 
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+    def _to_tensor(self, data: np.ndarray) -> Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
     # Loads data in d4rl format, i.e. from Dict[str, np.array].
-    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
+    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]) -> None:
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
         n_transitions = data["observations"].shape[0]
@@ -162,7 +168,9 @@ class ReplayBuffer:
         print(f"Dataset size: {n_transitions}")
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        indices = np.random.randint(
+            0, min(self._size, self._pointer), size=batch_size
+        ).item()
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
@@ -170,7 +178,7 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self):
+    def add_transition(self) -> None:
         # Use this method to add new data into the replay buffer during fine-tuning.
         # I left it unimplemented since now we do not do fine-tuning.
         raise NotImplementedError
@@ -190,17 +198,17 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
 ) -> np.ndarray:
@@ -211,7 +219,7 @@ def eval_actor(
         state, done = env.reset(), False
         episode_reward = 0.0
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, _ = env.step(action)
             episode_reward += reward
         episode_rewards.append(episode_reward)
@@ -249,7 +257,7 @@ def modify_reward(
     dataset["rewards"] = dataset["rewards"] * reward_scale + reward_bias
 
 
-def extend_and_repeat(tensor: torch.Tensor, dim: int, repeat: int) -> torch.Tensor:
+def extend_and_repeat(tensor: Tensor, dim: int, repeat: int) -> Tensor:
     return tensor.unsqueeze(dim).repeat_interleave(repeat, dim=dim)
 
 
@@ -285,11 +293,10 @@ class ReparameterizedTanhGaussian(nn.Module):
         self.log_std_max = log_std_max
         self.no_tanh = no_tanh
 
-    def log_prob(
-        self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
-    ) -> torch.Tensor:
+    def log_prob(self, mean: Tensor, log_std: Tensor, sample: Tensor) -> Tensor:
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
+        action_distribution: Distribution
         if self.no_tanh:
             action_distribution = Normal(mean, std)
         else:
@@ -299,11 +306,11 @@ class ReparameterizedTanhGaussian(nn.Module):
         return torch.sum(action_distribution.log_prob(sample), dim=-1)
 
     def forward(
-        self, mean: torch.Tensor, log_std: torch.Tensor, deterministic: bool = False
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, mean: Tensor, log_std: Tensor, deterministic: bool = False
+    ) -> Tuple[Tensor, Tensor]:
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
-
+        action_distribution: Distribution
         if self.no_tanh:
             action_distribution = Normal(mean, std)
         else:
@@ -362,13 +369,9 @@ class TanhGaussianPolicy(nn.Module):
 
         self.log_std_multiplier = Scalar(log_std_multiplier)
         self.log_std_offset = Scalar(log_std_offset)
-        self.tanh_gaussian = ReparameterizedTanhGaussian(
-            no_tanh=no_tanh
-        )
+        self.tanh_gaussian = ReparameterizedTanhGaussian(no_tanh=no_tanh)
 
-    def log_prob(
-        self, observations: torch.Tensor, actions: torch.Tensor
-    ) -> torch.Tensor:
+    def log_prob(self, observations: Tensor, actions: Tensor) -> Tensor:
         if actions.ndim == 3:
             observations = extend_and_repeat(observations, 1, actions.shape[1])
         base_network_output = self.base_network(observations)
@@ -386,18 +389,18 @@ class TanhGaussianPolicy(nn.Module):
             if self._pos_act:
                 mean = torch.nn.functional.relu(mean)
             else:
-                mean = - torch.nn.functional.relu(mean)
+                mean = -torch.nn.functional.relu(mean)
             mean.clamp_(self._min_action, self._max_action)
 
         _, log_probs = self.tanh_gaussian(mean, log_std, False)
-        return log_probs
+        return log_probs  # type: ignore
 
     def forward(
         self,
-        observations: torch.Tensor,
+        observations: Tensor,
         deterministic: bool = False,
-        repeat: bool = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        repeat: bool = None,  # type: ignore
+    ) -> Tuple[Tensor, Tensor]:
         if repeat is not None:
             observations = extend_and_repeat(observations, 1, repeat)
         base_network_output = self.base_network(observations)
@@ -415,15 +418,15 @@ class TanhGaussianPolicy(nn.Module):
             if self._pos_act:
                 mean = torch.nn.functional.relu(mean)
             else:
-                mean = - torch.nn.functional.relu(mean)
+                mean = -torch.nn.functional.relu(mean)
             mean.clamp_(self._min_action, self._max_action)
 
         actions, log_probs = self.tanh_gaussian(mean, log_std, deterministic)
         return actions, log_probs
 
-    @torch.no_grad()
-    def act(self, state: np.ndarray, device: str = "cpu"):
-        state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
+    @torch.no_grad()  # type: ignore
+    def act(self, _state: np.ndarray, device: str = "cpu"):
+        state = torch.tensor(_state.reshape(1, -1), device=device, dtype=torch.float32)
         with torch.no_grad():
             actions, _ = self(state, not self.training)
         return actions.cpu().data.numpy().flatten()
@@ -456,9 +459,7 @@ class FullyConnectedQFunction(nn.Module):
 
         init_module_weights(self.network, orthogonal_init)
 
-    def forward(
-        self, observations: torch.Tensor, actions: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, observations: Tensor, actions: Tensor) -> Tensor:
         multiple_actions = False
         batch_size = observations.shape[0]
         if actions.ndim == 3 and observations.ndim == 2:
@@ -550,6 +551,7 @@ class ContinuousCQL:
         self.critic_1_optimizer = critic_1_optimizer
         self.critic_2_optimizer = critic_2_optimizer
 
+        self.log_alpha: nn.Module
         if self.use_automatic_entropy_tuning:
             self.log_alpha = Scalar(0.0)
             self.alpha_optimizer = torch.optim.Adam(
@@ -557,7 +559,7 @@ class ContinuousCQL:
                 lr=self.policy_lr,
             )
         else:
-            self.log_alpha = None
+            self.log_alpha = None  # type: ignore
 
         self.log_alpha_prime = Scalar(1.0)
         self.alpha_prime_optimizer = torch.optim.Adam(
@@ -572,7 +574,7 @@ class ContinuousCQL:
         soft_update(self.target_critic_2, self.critic_2, soft_target_update_rate)
 
     def _alpha_and_alpha_loss(
-        self, observations: torch.Tensor, log_pi: torch.Tensor
+        self, observations: Tensor, log_pi: Tensor
     ) -> Union[Any, Any]:
         if self.use_automatic_entropy_tuning:
             alpha_loss = -(
@@ -586,14 +588,15 @@ class ContinuousCQL:
 
     def _policy_loss(
         self,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
-        new_actions: torch.Tensor,
-        alpha: torch.Tensor,
-        log_pi: torch.Tensor,
-    ) -> torch.Tensor:
+        observations: Tensor,
+        actions: Tensor,
+        new_actions: Tensor,
+        alpha: Tensor,
+        log_pi: Tensor,
+    ) -> Tensor:
+        policy_loss: Tensor
         if self.total_it <= self.bc_steps:
-            log_probs = self.actor.log_prob(observations, actions)
+            log_probs = self.actor.log_prob(observations, actions)  # type: ignore
             policy_loss = (alpha * log_pi - log_probs).mean()
         else:
             q_new_actions = torch.min(
@@ -605,14 +608,14 @@ class ContinuousCQL:
 
     def _q_loss(
         self,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
-        next_observations: torch.Tensor,
-        rewards: torch.Tensor,
-        dones: torch.Tensor,
-        alpha: torch.Tensor,
+        observations: Tensor,
+        actions: Tensor,
+        next_observations: Tensor,
+        rewards: Tensor,
+        dones: Tensor,
+        alpha: Tensor,
         log_dict: Dict,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         q1_predicted = self.critic_1(observations, actions)
         q2_predicted = self.critic_2(observations, actions)
 
@@ -857,7 +860,7 @@ class ContinuousCQL:
             "total_it": self.total_it,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.actor.load_state_dict(state_dict=state_dict["actor"])
         self.critic_1.load_state_dict(state_dict=state_dict["critic1"])
         self.critic_2.load_state_dict(state_dict=state_dict["critic2"])
