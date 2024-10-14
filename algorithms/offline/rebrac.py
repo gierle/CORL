@@ -10,7 +10,7 @@ import uuid
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from functools import partial
-from typing import Any, Callable, Dict, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 import chex
 import d4rl  # noqa
@@ -66,7 +66,7 @@ class Config:
     train_seed: int = 0
     eval_seed: int = 42
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.dataset_name}-{str(uuid.uuid4())[:8]}"
 
 
@@ -104,7 +104,7 @@ class DetActor(nn.Module):
     layernorm: bool = True
     n_hiddens: int = 3
 
-    @nn.compact
+    @nn.compact  # type: ignore
     def __call__(self, state: jax.Array) -> jax.Array:
         s_d, h_d = state.shape[-1], self.hidden_dim
         # Initialization as in the EDAC paper
@@ -145,7 +145,7 @@ class Critic(nn.Module):
     layernorm: bool = True
     n_hiddens: int = 3
 
-    @nn.compact
+    @nn.compact  # type: ignore
     def __call__(self, state: jax.Array, action: jax.Array) -> jax.Array:
         s_d, a_d, h_d = state.shape[-1], action.shape[-1], self.hidden_dim
         # Initialization as in the EDAC paper
@@ -183,7 +183,7 @@ class EnsembleCritic(nn.Module):
     layernorm: bool = True
     n_hiddens: int = 3
 
-    @nn.compact
+    @nn.compact  # type: ignore
     def __call__(self, state: jax.Array, action: jax.Array) -> jax.Array:
         ensemble = nn.vmap(
             target=Critic,
@@ -201,9 +201,9 @@ class EnsembleCritic(nn.Module):
 
 def qlearning_dataset(
     env: gym.Env,
-    dataset: Dict = None,
+    dataset: Optional[Dict] = None,
     terminate_on_end: bool = False,
-    **kwargs,
+    **kwargs: dict,
 ) -> Dict:
     if dataset is None:
         dataset = env.get_dataset(**kwargs)
@@ -265,12 +265,12 @@ def compute_mean_std(states: jax.Array, eps: float) -> Tuple[jax.Array, jax.Arra
 
 
 def normalize_states(states: jax.Array, mean: jax.Array, std: jax.Array) -> jax.Array:
-    return (states - mean) / std
+    return (states - mean) / std  # type: ignore
 
 
 @chex.dataclass
 class ReplayBuffer:
-    data: Dict[str, jax.Array] = None
+    data: Dict[str, jax.Array]
     mean: float = 0
     std: float = 1
 
@@ -279,7 +279,7 @@ class ReplayBuffer:
         dataset_name: str,
         normalize_reward: bool = False,
         is_normalize: bool = False,
-    ):
+    ) -> None:
         d4rl_data = qlearning_dataset(gym.make(dataset_name))
         buffer = {
             "states": jnp.asarray(d4rl_data["observations"], dtype=jnp.float32),
@@ -306,7 +306,7 @@ class ReplayBuffer:
     @property
     def size(self) -> int:
         # WARN: It will use len of the dataclass, i.e. number of fields.
-        return self.data["states"].shape[0]
+        return self.data["states"].shape[0]  # type: ignore
 
     def sample_batch(
         self, key: jax.random.PRNGKey, batch_size: int
@@ -314,7 +314,7 @@ class ReplayBuffer:
         indices = jax.random.randint(
             key, shape=(batch_size,), minval=0, maxval=self.size
         )
-        batch = jax.tree_map(lambda arr: arr[indices], self.data)
+        batch: Dict = jax.tree_map(lambda arr: arr[indices], self.data)
         return batch
 
     def get_moments(self, modality: str) -> Tuple[jax.Array, jax.Array]:
@@ -339,7 +339,7 @@ class Metrics:
     @staticmethod
     def create(metrics: Sequence[str]) -> "Metrics":
         init_metrics = {key: (jnp.array([0.0]), jnp.array([0.0])) for key in metrics}
-        return Metrics(accumulators=init_metrics)
+        return Metrics(accumulators=init_metrics)  # type: ignore
 
     def update(self, updates: Dict[str, jax.Array]) -> "Metrics":
         new_accumulators = deepcopy(self.accumulators)
@@ -347,7 +347,7 @@ class Metrics:
             acc, steps = new_accumulators[key]
             new_accumulators[key] = (acc + value, steps + 1)
 
-        return self.replace(accumulators=new_accumulators)
+        return self.replace(accumulators=new_accumulators)  # type: ignore
 
     def compute(self) -> Dict[str, np.ndarray]:
         # cumulative_value / total_steps
@@ -584,27 +584,27 @@ def update_td3_no_targets(
 
 
 def action_fn(actor: TrainState) -> Callable:
-    @jax.jit
+    @jax.jit  # type: ignore
     def _action_fn(obs: jax.Array) -> jax.Array:
         action = actor.apply_fn(actor.params, obs)
         return action
 
-    return _action_fn
+    return _action_fn  # type: ignore
 
 
-@pyrallis.wrap()
-def main(config: Config):
+@pyrallis.wrap()  # type: ignore
+def main(config: Config) -> None:
     dict_config = asdict(config)
     dict_config["mlc_job_name"] = os.environ.get("PLATFORM_JOB_NAME")
 
-    wandb.init(
+    wandb.init(  # type: ignore
         config=dict_config,
         project=config.project,
         group=config.group,
         name=config.name,
         id=str(uuid.uuid4()),
     )
-    wandb.mark_preempting()
+    wandb.mark_preempting()  # type: ignore
     buffer = ReplayBuffer()
     buffer.create_from_d4rl(
         config.dataset_name, config.normalize_reward, config.normalize_states
@@ -665,7 +665,7 @@ def main(config: Config):
         noise_clip=config.noise_clip,
     )
 
-    def td3_loop_update_step(i: int, carry: TrainState):
+    def td3_loop_update_step(i: int, carry: TrainState) -> TrainState:
         key, batch_key = jax.random.split(carry["key"])
         batch = carry["buffer"].sample_batch(batch_key, batch_size=config.batch_size)
 
@@ -715,8 +715,8 @@ def main(config: Config):
         ).astype(int),
     }
 
-    @jax.jit
-    def actor_action_fn(params: jax.Array, obs: jax.Array):
+    @jax.jit  # type: ignore
+    def actor_action_fn(params: jax.Array, obs: jax.Array) -> Any:
         return actor.apply_fn(params, obs)
 
     for epoch in trange(config.num_epochs, desc="ReBRAC Epochs"):
@@ -732,7 +732,7 @@ def main(config: Config):
         )
         # log mean over epoch for each metric
         mean_metrics = update_carry["metrics"].compute()
-        wandb.log(
+        wandb.log(  # type: ignore
             {"epoch": epoch, **{f"ReBRAC/{k}": v for k, v in mean_metrics.items()}}
         )
 
@@ -745,7 +745,7 @@ def main(config: Config):
                 seed=config.eval_seed,
             )
             normalized_score = eval_env.get_normalized_score(eval_returns) * 100.0
-            wandb.log(
+            wandb.log(  # type: ignore
                 {
                     "epoch": epoch,
                     "eval/return_mean": np.mean(eval_returns),

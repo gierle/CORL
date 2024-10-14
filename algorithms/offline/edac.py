@@ -15,6 +15,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import wandb
+from torch import Tensor
 from torch.distributions import Normal
 
 @dataclass
@@ -51,34 +52,34 @@ class TrainConfig:
     log_every: int = 100
     device: str = "cpu"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
 # general utils
-TensorBatch = List[torch.Tensor]
+TensorBatch = List[Tensor]
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         env.seed(seed)
         env.action_space.seed(seed)
@@ -95,10 +96,10 @@ def wrap_env(
     state_std: Union[np.ndarray, float] = 1.0,
     reward_scale: float = 1.0,
 ) -> gym.Env:
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (state - state_mean) / state_std
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         return reward_scale * reward
 
     env = gym.wrappers.TransformObservation(env, normalize_state)
@@ -134,11 +135,11 @@ class ReplayBuffer:
         self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
 
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+    def _to_tensor(self, data: np.ndarray) -> Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
     # Loads data in d4rl format, i.e. from Dict[str, np.array].
-    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
+    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]) -> None:
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
         n_transitions = data["observations"].shape[0]
@@ -157,7 +158,9 @@ class ReplayBuffer:
         print(f"Dataset size: {n_transitions}")
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        indices = np.random.randint(
+            0, min(self._size, self._pointer), size=batch_size
+        ).item()
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
@@ -165,7 +168,7 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self):
+    def add_transition(self) -> None:
         # Use this method to add new data into the replay buffer during fine-tuning.
         raise NotImplementedError
 
@@ -185,7 +188,7 @@ class VectorizedLinear(nn.Module):
 
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         # default pytorch init for nn.Linear module
         for layer in range(self.ensemble_size):
             nn.init.kaiming_uniform_(self.weight[layer], a=math.sqrt(5))
@@ -194,7 +197,7 @@ class VectorizedLinear(nn.Module):
         bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
         nn.init.uniform_(self.bias, -bound, bound)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         # input: [ensemble_size, batch_size, input_size]
         # weight: [ensemble_size, input_size, out_size]
         # out: [ensemble_size, batch_size, out_size]
@@ -248,10 +251,10 @@ class Actor(nn.Module):
 
     def forward(
         self,
-        state: torch.Tensor,
+        state: Tensor,
         deterministic: bool = False,
         need_log_prob: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[Tensor, Optional[Tensor]]:
         hidden = self.trunk(state)
         mu, log_sigma = self.mu(hidden), self.log_sigma(hidden)
 
@@ -268,7 +271,8 @@ class Actor(nn.Module):
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
             log_prob = policy_dist.log_prob(action).sum(axis=-1)
-            log_prob = log_prob - torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)
+            log_prob = log_prob - \
+                torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)  # type: ignore
 
         # instead of [-1,1] -> [self.min_action, self.max_action]
         scaled_action = (tanh_action - 1) * (
@@ -277,11 +281,11 @@ class Actor(nn.Module):
 
         return scaled_action, log_prob
 
-    @torch.no_grad()
+    @torch.no_grad()  # type: ignore
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         deterministic = not self.training
         state = torch.tensor(state, device=device, dtype=torch.float32)
-        action = self(state, deterministic=deterministic)[0].cpu().numpy()
+        action: np.ndarray = self(state, deterministic=deterministic)[0].cpu().numpy()
         return action
 
 
@@ -320,7 +324,7 @@ class VectorizedCritic(nn.Module):
 
         self.num_critics = num_critics
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    def forward(self, state: Tensor, action: Tensor) -> Tensor:
         # [..., batch_size, state_dim + action_dim]
         state_action = torch.cat([state, action], dim=-1)
         if state_action.dim() != 3:
@@ -373,7 +377,7 @@ class EDAC:
         )
         self.alpha = self.log_alpha.exp().detach()
 
-    def _alpha_loss(self, state: torch.Tensor) -> torch.Tensor:
+    def _alpha_loss(self, state: Tensor) -> Tensor:
         with torch.no_grad():
             action, action_log_prob = self.actor(state, need_log_prob=True)
 
@@ -381,7 +385,7 @@ class EDAC:
 
         return loss
 
-    def _actor_loss(self, state: torch.Tensor) -> Tuple[torch.Tensor, float, float]:
+    def _actor_loss(self, state: Tensor) -> Tuple[Tensor, float, float]:
         action, action_log_prob = self.actor(state, need_log_prob=True)
         q_value_dist = self.critic(state, action)
         assert q_value_dist.shape[0] == self.critic.num_critics
@@ -395,9 +399,7 @@ class EDAC:
 
         return loss, batch_entropy, q_value_std
 
-    def _critic_diversity_loss(
-        self, state: torch.Tensor, action: torch.Tensor
-    ) -> torch.Tensor:
+    def _critic_diversity_loss(self, state: Tensor, action: Tensor) -> Tensor:
         num_critics = self.critic.num_critics
         # almost exact copy from the original implementation, only style changes:
         # https://github.com/snu-mllab/EDAC/blob/198d5708701b531fd97a918a33152e1914ea14d7/lifelong_rl/trainers/q_learning/sac.py#L192
@@ -438,12 +440,12 @@ class EDAC:
 
     def _critic_loss(
         self,
-        state: torch.Tensor,
-        action: torch.Tensor,
-        reward: torch.Tensor,
-        next_state: torch.Tensor,
-        done: torch.Tensor,
-    ) -> torch.Tensor:
+        state: Tensor,
+        action: Tensor,
+        reward: Tensor,
+        next_state: Tensor,
+        done: Tensor,
+    ) -> Tensor:
         with torch.no_grad():
             next_action, next_action_log_prob = self.actor(
                 next_state, need_log_prob=True
@@ -523,7 +525,7 @@ class EDAC:
         }
         return state
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.actor.load_state_dict(state_dict["actor"])
         self.critic.load_state_dict(state_dict["critic"])
         self.target_critic.load_state_dict(state_dict["target_critic"])
@@ -534,7 +536,7 @@ class EDAC:
         self.alpha = self.log_alpha.exp().detach()
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: Actor, device: str, n_episodes: int, seed: int
 ) -> np.ndarray:
@@ -545,7 +547,7 @@ def eval_actor(
         state, done = env.reset(), False
         episode_reward = 0.0
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, _ = env.step(action)
             episode_reward += reward
         episode_rewards.append(episode_reward)
@@ -554,7 +556,7 @@ def eval_actor(
     return np.array(episode_rewards)
 
 
-def return_reward_range(dataset, max_episode_steps):
+def return_reward_range(dataset: dict, max_episode_steps: int) -> tuple[float, float]:
     returns, lengths = [], []
     ep_ret, ep_len = 0.0, 0
     for r, d in zip(dataset["rewards"], dataset["terminals"]):
@@ -569,7 +571,9 @@ def return_reward_range(dataset, max_episode_steps):
     return min(returns), max(returns)
 
 
-def modify_reward(dataset, env_name, max_episode_steps=1000):
+def modify_reward(
+    dataset: dict, env_name: list[str], max_episode_steps: int = 1000
+) -> None:
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
         min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
         dataset["rewards"] /= max_ret - min_ret
