@@ -48,7 +48,7 @@ class TrainConfig:
     tau: float = 5e-3
     awac_lambda: float = 1.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
@@ -72,7 +72,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -212,7 +214,7 @@ class Critic(nn.Module):
         return q_value
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
@@ -336,7 +338,7 @@ class AdvantageWeightedActorCritic:
             "critic_2": self._critic_2.state_dict(),
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self._actor.load_state_dict(state_dict["actor"])
         self._critic_1.load_state_dict(state_dict["critic_1"])
         self._critic_2.load_state_dict(state_dict["critic_2"])
@@ -344,7 +346,7 @@ class AdvantageWeightedActorCritic:
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         set_env_seed(env, seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -360,8 +362,10 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
     return mean, std
 
 
-def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
-    return (states - mean) / std
+def normalize_states(
+    states: np.ndarray, mean: np.ndarray, std: np.ndarray
+) -> np.ndarray:
+    return (states - mean) / std  # type: ignore
 
 
 def wrap_env(
@@ -369,7 +373,7 @@ def wrap_env(
     state_mean: Union[np.ndarray, float] = 0.0,
     state_std: Union[np.ndarray, float] = 1.0,
 ) -> gym.Env:
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (state - state_mean) / state_std
 
     env = gym.wrappers.TransformObservation(env, normalize_state)
@@ -382,7 +386,7 @@ def is_goal_reached(reward: float, info: Dict) -> bool:
     return reward > 0  # Assuming that reaching target is a positive reward
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: Actor, device: str, n_episodes: int, seed: int
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -395,7 +399,7 @@ def eval_actor(
         episode_reward = 0.0
         goal_achieved = False
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, env_infos = env.step(action)
             episode_reward += reward
             if not goal_achieved:
@@ -448,14 +452,14 @@ def modify_reward_online(reward: float, env_name: str, **kwargs) -> float:
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 @pyrallis.wrap()
@@ -507,8 +511,12 @@ def train(config: TrainConfig):
     critic_2 = Critic(**actor_critic_kwargs)
     critic_1.to(config.device)
     critic_2.to(config.device)
-    critic_1_optimizer = torch.optim.Adam(critic_1.parameters(), lr=config.learning_rate)
-    critic_2_optimizer = torch.optim.Adam(critic_2.parameters(), lr=config.learning_rate)
+    critic_1_optimizer = torch.optim.Adam(
+        critic_1.parameters(), lr=config.learning_rate
+    )
+    critic_2_optimizer = torch.optim.Adam(
+        critic_2.parameters(), lr=config.learning_rate
+    )
 
     awac = AdvantageWeightedActorCritic(
         actor=actor,
@@ -563,7 +571,9 @@ def train(config: TrainConfig):
                 real_done = True
 
             if config.normalize_reward:
-                reward = modify_reward_online(reward, config.env_name, **reward_mod_dict)
+                reward = modify_reward_online(
+                    reward, config.env_name, **reward_mod_dict
+                )
 
             replay_buffer.add_transition(state, action, reward, next_state, real_done)
             state = next_state

@@ -5,18 +5,18 @@ import os
 import random
 import uuid
 from collections import defaultdict
-from dataclasses import asdict, dataclass
-from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Any, DefaultDict, Dict, Generator, List, Optional, Tuple, Union
 
-import d4rl  # noqa
+# import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import wandb
+from torch import Tensor
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import IterableDataset
 from tqdm.auto import tqdm, trange  # noqa
 
 @dataclass
@@ -57,7 +57,7 @@ class TrainConfig:
     eval_seed: int = 42
     device: str = "cuda"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
@@ -66,7 +66,7 @@ class TrainConfig:
 # general utils
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         env.seed(seed)
         env.action_space.seed(seed)
@@ -78,14 +78,14 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 def wrap_env(
@@ -94,10 +94,10 @@ def wrap_env(
     state_std: Union[np.ndarray, float] = 1.0,
     reward_scale: float = 1.0,
 ) -> gym.Env:
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (state - state_mean) / state_std
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         return reward_scale * reward
 
     env = gym.wrappers.TransformObservation(env, normalize_state)
@@ -191,10 +191,12 @@ class SequenceDataset(IterableDataset):
 
         return states, actions, returns, time_steps, mask
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[Any, Any, Any]:
         while True:
             traj_idx = np.random.choice(len(self.dataset), p=self.sample_prob)
-            start_idx = random.randint(0, self.dataset[traj_idx]["rewards"].shape[0] - 1)
+            start_idx = random.randint(
+                0, self.dataset[traj_idx]["rewards"].shape[0] - 1
+            )
             yield self.__prepare_sample(traj_idx, start_idx)
 
 
@@ -230,8 +232,8 @@ class TransformerBlock(nn.Module):
 
     # [batch_size, seq_len, emb_dim] -> [batch_size, seq_len, emb_dim]
     def forward(
-        self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+        self, x: Tensor, padding_mask: Optional[Tensor] = None
+    ) -> Tensor:
         causal_mask = self.causal_mask[: x.shape[1], : x.shape[1]]
 
         norm_x = self.norm1(x)
@@ -265,6 +267,7 @@ class DecisionTransformer(nn.Module):
         residual_dropout: float = 0.0,
         embedding_dropout: float = 0.0,
         max_action: float = 1.0,
+        min_action: float = 0.0,
     ):
         super().__init__()
         self.emb_drop = nn.Dropout(embedding_dropout)
@@ -289,18 +292,21 @@ class DecisionTransformer(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        self.action_head = nn.Sequential(nn.Linear(embedding_dim, action_dim), nn.Tanh())
+        self.action_head = nn.Sequential(
+            nn.Linear(embedding_dim, action_dim), nn.Tanh()
+        )
         self.seq_len = seq_len
         self.embedding_dim = embedding_dim
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.episode_len = episode_len
         self.max_action = max_action
+        self.min_action = min_action
 
         self.apply(self._init_weights)
 
     @staticmethod
-    def _init_weights(module: nn.Module):
+    def _init_weights(module: nn.Module) -> None:
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
@@ -311,18 +317,18 @@ class DecisionTransformer(nn.Module):
 
     def forward(
         self,
-        states: torch.Tensor,  # [batch_size, seq_len, state_dim]
-        actions: torch.Tensor,  # [batch_size, seq_len, action_dim]
-        returns_to_go: torch.Tensor,  # [batch_size, seq_len]
-        time_steps: torch.Tensor,  # [batch_size, seq_len]
-        padding_mask: Optional[torch.Tensor] = None,  # [batch_size, seq_len]
+        states: Tensor,  # [batch_size, seq_len, state_dim]
+        actions: Tensor,  # [batch_size, seq_len, action_dim]
+        returns_to_go: Tensor,  # [batch_size, seq_len]
+        time_steps: Tensor,  # [batch_size, seq_len]
+        padding_mask: Optional[Tensor] = None,  # [batch_size, seq_len]
     ) -> torch.FloatTensor:
         batch_size, seq_len = states.shape[0], states.shape[1]
         # [batch_size, seq_len, emb_dim]
         time_emb = self.timestep_emb(time_steps)
         state_emb = self.state_emb(states) + time_emb
         act_emb = self.action_emb(actions) + time_emb
-        returns_emb = self.return_emb(returns_to_go.unsqueeze(-1)) + time_emb
+        returns_emb = self.return_emb(returns_to_go.unsqueeze(-1)) #+ time_emb
 
         # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
         sequence = (
@@ -348,12 +354,58 @@ class DecisionTransformer(nn.Module):
         out = self.out_norm(out)
         # [batch_size, seq_len, action_dim]
         # predict actions only from state embeddings
-        out = self.action_head(out[:, 1::3]) * self.max_action
+        out = self.action_head(out[:, 1::3])
+        out.clamp_(self.min_action, self.max_action)
         return out
 
 
+class DTWrapper:
+    def __init__(
+        self,
+        model: DecisionTransformer,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        clip_grad: Optional[float],
+    ) -> None:
+        self.model = model
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.clip_grad = clip_grad
+
+        self.total_it = 0
+
+    def train(self, batch: List[Tensor]) -> Dict[str, float]:
+        self.total_it += 1
+        (
+            states,
+            actions,
+            rewards,
+            next_states,
+            dones,
+        ) = batch
+        timesteps = (100 - states[:,0] * 100).to(torch.int)
+        mask = ~dones.to(torch.bool)
+        pred = self.model(states, actions, rewards, timesteps, mask)
+
+        loss = F.mse_loss(pred, actions.detach(), reduction="none")
+        # [batch_size, seq_len, action_dim] * [batch_size, seq_len, 1]
+        loss = (loss * mask.unsqueeze(-1)).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        if self.clip_grad is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad)
+        self.optimizer.step()
+        self.scheduler.step()
+
+        return {
+            "train_loss": loss.item(),
+            "learning_rate": self.scheduler.get_last_lr()[0],
+        }
+
+
 # Training and evaluation logic
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_rollout(
     model: DecisionTransformer,
     env: gym.Env,
@@ -401,139 +453,148 @@ def eval_rollout(
     return episode_return, episode_len
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
-    set_seed(config.train_seed, deterministic_torch=config.deterministic_torch)
-    # init wandb session for logging
-    wandb_init(asdict(config))
+# @pyrallis.wrap()
+# def train(config: TrainConfig):
+#     set_seed(config.train_seed, deterministic_torch=config.deterministic_torch)
+#     # init wandb session for logging
+#     wandb_init(asdict(config))
 
-    # data & dataloader setup
-    dataset = SequenceDataset(
-        config.env_name, seq_len=config.seq_len, reward_scale=config.reward_scale
-    )
-    trainloader = DataLoader(
-        dataset,
-        batch_size=config.batch_size,
-        pin_memory=True,
-        num_workers=config.num_workers,
-    )
-    # evaluation environment with state & reward preprocessing (as in dataset above)
-    eval_env = wrap_env(
-        env=gym.make(config.env_name),
-        state_mean=dataset.state_mean,
-        state_std=dataset.state_std,
-        reward_scale=config.reward_scale,
-    )
-    # model & optimizer & scheduler setup
-    config.state_dim = eval_env.observation_space.shape[0]
-    config.action_dim = eval_env.action_space.shape[0]
-    model = DecisionTransformer(
-        state_dim=config.state_dim,
-        action_dim=config.action_dim,
-        embedding_dim=config.embedding_dim,
-        seq_len=config.seq_len,
-        episode_len=config.episode_len,
-        num_layers=config.num_layers,
-        num_heads=config.num_heads,
-        attention_dropout=config.attention_dropout,
-        residual_dropout=config.residual_dropout,
-        embedding_dropout=config.embedding_dropout,
-        max_action=config.max_action,
-    ).to(config.device)
+#     # data & dataloader setup
+#     dataset = SequenceDataset(
+#         config.env_name, seq_len=config.seq_len, reward_scale=config.reward_scale
+#     )
+#     trainloader = DataLoader(
+#         dataset,
+#         batch_size=config.batch_size,
+#         pin_memory=True,
+#         num_workers=config.num_workers,
+#     )
+#     # evaluation environment with state & reward preprocessing (as in dataset above)
+#     eval_env = wrap_env(
+#         env=gym.make(config.env_name),
+#         state_mean=dataset.state_mean,
+#         state_std=dataset.state_std,
+#         reward_scale=config.reward_scale,
+#     )
+#     # model & optimizer & scheduler setup
+#     config.state_dim = eval_env.observation_space.shape[0]
+#     config.action_dim = eval_env.action_space.shape[0]
+#     model = DecisionTransformer(
+#         state_dim=config.state_dim,
+#         action_dim=config.action_dim,
+#         embedding_dim=config.embedding_dim,
+#         seq_len=config.seq_len,
+#         episode_len=config.episode_len,
+#         num_layers=config.num_layers,
+#         num_heads=config.num_heads,
+#         attention_dropout=config.attention_dropout,
+#         residual_dropout=config.residual_dropout,
+#         embedding_dropout=config.embedding_dropout,
+#         max_action=config.max_action,
+#     ).to(config.device)
 
-    optim = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.learning_rate,
-        weight_decay=config.weight_decay,
-        betas=config.betas,
-    )
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optim,
-        lambda steps: min((steps + 1) / config.warmup_steps, 1),
-    )
-    # save config to the checkpoint
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
+#     optim = torch.optim.AdamW(
+#         model.parameters(),
+#         lr=config.learning_rate,
+#         weight_decay=config.weight_decay,
+#         betas=config.betas,
+#     )
+#     scheduler = torch.optim.lr_scheduler.LambdaLR(
+#         optim,
+#         lambda steps: min((steps + 1) / config.warmup_steps, 1),
+#     )
+#     # save config to the checkpoint
+#     if config.checkpoints_path is not None:
+#         print(f"Checkpoints path: {config.checkpoints_path}")
+#         os.makedirs(config.checkpoints_path, exist_ok=True)
+#         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
+#             pyrallis.dump(config, f)
 
-    print(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
-    trainloader_iter = iter(trainloader)
-    for step in trange(config.update_steps, desc="Training"):
-        batch = next(trainloader_iter)
-        states, actions, returns, time_steps, mask = [b.to(config.device) for b in batch]
-        # True value indicates that the corresponding key value will be ignored
-        padding_mask = ~mask.to(torch.bool)
+#     print(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
+#     trainloader_iter = iter(trainloader)
+#     for step in trange(config.update_steps, desc="Training"):
+#         batch = next(trainloader_iter)
+#         (
+        #     states, 
+        #     actions, 
+        #     returns, 
+        #     time_steps, 
+        #     mask
+        # ) = [b.to(config.device) for b in batch]
+#         # True value indicates that the corresponding key value will be ignored
+#         padding_mask = ~mask.to(torch.bool)
 
-        predicted_actions = model(
-            states=states,
-            actions=actions,
-            returns_to_go=returns,
-            time_steps=time_steps,
-            padding_mask=padding_mask,
-        )
-        loss = F.mse_loss(predicted_actions, actions.detach(), reduction="none")
-        # [batch_size, seq_len, action_dim] * [batch_size, seq_len, 1]
-        loss = (loss * mask.unsqueeze(-1)).mean()
+#         predicted_actions = model(
+#             states=states,
+#             actions=actions,
+#             returns_to_go=returns,
+#             time_steps=time_steps,
+#             padding_mask=padding_mask,
+#         )
+#         loss = F.mse_loss(predicted_actions, actions.detach(), reduction="none")
+#         # [batch_size, seq_len, action_dim] * [batch_size, seq_len, 1]
+#         loss = (loss * mask.unsqueeze(-1)).mean()
 
-        optim.zero_grad()
-        loss.backward()
-        if config.clip_grad is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad)
-        optim.step()
-        scheduler.step()
+#         optim.zero_grad()
+#         loss.backward()
+#         if config.clip_grad is not None:
+#             torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad)
+#         optim.step()
+#         scheduler.step()
 
-        wandb.log(
-            {
-                "train_loss": loss.item(),
-                "learning_rate": scheduler.get_last_lr()[0],
-            },
-            step=step,
-        )
+#         wandb.log(
+#             {
+#                 "train_loss": loss.item(),
+#                 "learning_rate": scheduler.get_last_lr()[0],
+#             },
+#             step=step,
+#         )
 
-        # validation in the env for the actual online performance
-        if step % config.eval_every == 0 or step == config.update_steps - 1:
-            model.eval()
-            for target_return in config.target_returns:
-                eval_env.seed(config.eval_seed)
-                eval_returns = []
-                for _ in trange(config.eval_episodes, desc="Evaluation", leave=False):
-                    eval_return, eval_len = eval_rollout(
-                        model=model,
-                        env=eval_env,
-                        target_return=target_return * config.reward_scale,
-                        device=config.device,
-                    )
-                    # unscale for logging & correct normalized score computation
-                    eval_returns.append(eval_return / config.reward_scale)
+#         # validation in the env for the actual online performance
+#         if step % config.eval_every == 0 or step == config.update_steps - 1:
+#             model.eval()
+#             for target_return in config.target_returns:
+#                 eval_env.seed(config.eval_seed)
+#                 eval_returns = []
+#                 for _ in trange(config.eval_episodes, desc="Evaluation", leave=False):
+#                     eval_return, eval_len = eval_rollout(
+#                         model=model,
+#                         env=eval_env,
+#                         target_return=target_return * config.reward_scale,
+#                         device=config.device,
+#                     )
+#                     # unscale for logging & correct normalized score computation
+#                     eval_returns.append(eval_return / config.reward_scale)
 
-                normalized_scores = (
-                    eval_env.get_normalized_score(np.array(eval_returns)) * 100
-                )
-                wandb.log(
-                    {
-                        f"eval/{target_return}_return_mean": np.mean(eval_returns),
-                        f"eval/{target_return}_return_std": np.std(eval_returns),
-                        f"eval/{target_return}_normalized_score_mean": np.mean(
-                            normalized_scores
-                        ),
-                        f"eval/{target_return}_normalized_score_std": np.std(
-                            normalized_scores
-                        ),
-                    },
-                    step=step,
-                )
-            model.train()
+#                 normalized_scores = (
+#                     eval_env.get_normalized_score(np.array(eval_returns)) * 100
+#                 )
+#                 wandb.log(
+#                     {
+#                         f"eval/{target_return}_return_mean": np.mean(eval_returns),
+#                         f"eval/{target_return}_return_std": np.std(eval_returns),
+#                         f"eval/{target_return}_normalized_score_mean": np.mean(
+#                             normalized_scores
+#                         ),
+#                         f"eval/{target_return}_normalized_score_std": np.std(
+#                             normalized_scores
+#                         ),
+#                     },
+#                     step=step,
+#                 )
+#             model.train()
 
-    if config.checkpoints_path is not None:
-        checkpoint = {
-            "model_state": model.state_dict(),
-            "state_mean": dataset.state_mean,
-            "state_std": dataset.state_std,
-        }
-        torch.save(checkpoint, os.path.join(config.checkpoints_path, "dt_checkpoint.pt"))
+#     if config.checkpoints_path is not None:
+#         checkpoint = {
+#             "model_state": model.state_dict(),
+#             "state_mean": dataset.state_mean,
+#             "state_std": dataset.state_std,
+#         }
+#         torch.save(
+        #     checkpoint, 
+        #     os.path.join(config.checkpoints_path, "dt_checkpoint.pt")
+        # )
 
 
-if __name__ == "__main__":
-    train()
+# if __name__ == "__main__":
+#     train()

@@ -6,18 +6,17 @@ import os
 import random
 import uuid
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import d4rl
+# import d4rl
 import gym
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import wandb
+from torch import Tensor
 from torch.distributions import Normal
-from tqdm import trange
 
 @dataclass
 class TrainConfig:
@@ -53,34 +52,34 @@ class TrainConfig:
     log_every: int = 100
     device: str = "cpu"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
 # general utils
-TensorBatch = List[torch.Tensor]
+TensorBatch = List[Tensor]
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         env.seed(seed)
         env.action_space.seed(seed)
@@ -97,10 +96,10 @@ def wrap_env(
     state_std: Union[np.ndarray, float] = 1.0,
     reward_scale: float = 1.0,
 ) -> gym.Env:
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (state - state_mean) / state_std
 
-    def scale_reward(reward):
+    def scale_reward(reward: int) -> float:
         return reward_scale * reward
 
     env = gym.wrappers.TransformObservation(env, normalize_state)
@@ -127,18 +126,20 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
         self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
 
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+    def _to_tensor(self, data: np.ndarray) -> Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
     # Loads data in d4rl format, i.e. from Dict[str, np.array].
-    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
+    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]) -> None:
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
         n_transitions = data["observations"].shape[0]
@@ -157,7 +158,9 @@ class ReplayBuffer:
         print(f"Dataset size: {n_transitions}")
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        indices = np.random.randint(
+            0, min(self._size, self._pointer), size=batch_size
+        ).item()
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
@@ -165,7 +168,7 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self):
+    def add_transition(self) -> None:
         # Use this method to add new data into the replay buffer during fine-tuning.
         raise NotImplementedError
 
@@ -178,12 +181,14 @@ class VectorizedLinear(nn.Module):
         self.out_features = out_features
         self.ensemble_size = ensemble_size
 
-        self.weight = nn.Parameter(torch.empty(ensemble_size, in_features, out_features))
+        self.weight = nn.Parameter(
+            torch.empty(ensemble_size, in_features, out_features)
+        )
         self.bias = nn.Parameter(torch.empty(ensemble_size, 1, out_features))
 
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         # default pytorch init for nn.Linear module
         for layer in range(self.ensemble_size):
             nn.init.kaiming_uniform_(self.weight[layer], a=math.sqrt(5))
@@ -192,7 +197,7 @@ class VectorizedLinear(nn.Module):
         bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
         nn.init.uniform_(self.bias, -bound, bound)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         # input: [ensemble_size, batch_size, input_size]
         # weight: [ensemble_size, input_size, out_size]
         # out: [ensemble_size, batch_size, out_size]
@@ -201,23 +206,38 @@ class VectorizedLinear(nn.Module):
 
 class Actor(nn.Module):
     def __init__(
-        self, state_dim: int, action_dim: int, hidden_dim: int, max_action: float = 1.0
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        dropout_rate: float,
+        max_action: float,
+        min_action: float,
     ):
         super().__init__()
         self.trunk = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            *[
+                nn.Linear(state_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        nn.Linear(hidden_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(dropout_rate),
+                    )
+                ],
+            ]
         )
         # with separate layers works better than with Linear(hidden_dim, 2 * action_dim)
         self.mu = nn.Linear(hidden_dim, action_dim)
         self.log_sigma = nn.Linear(hidden_dim, action_dim)
 
         # init as in the EDAC paper
-        for layer in self.trunk[::2]:
+        for layer in self.trunk[::3]:
             torch.nn.init.constant_(layer.bias, 0.1)
 
         torch.nn.init.uniform_(self.mu.weight, -1e-3, 1e-3)
@@ -226,14 +246,15 @@ class Actor(nn.Module):
         torch.nn.init.uniform_(self.log_sigma.bias, -1e-3, 1e-3)
 
         self.action_dim = action_dim
-        self.max_action = max_action
+        self._max_action = max_action
+        self._min_action = min_action
 
     def forward(
         self,
-        state: torch.Tensor,
+        state: Tensor,
         deterministic: bool = False,
         need_log_prob: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[Tensor, Optional[Tensor]]:
         hidden = self.trunk(state)
         mu, log_sigma = self.mu(hidden), self.log_sigma(hidden)
 
@@ -250,32 +271,50 @@ class Actor(nn.Module):
         if need_log_prob:
             # change of variables formula (SAC paper, appendix C, eq 21)
             log_prob = policy_dist.log_prob(action).sum(axis=-1)
-            log_prob = log_prob - torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)
+            log_prob = log_prob - \
+                torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)  # type: ignore
 
-        return tanh_action * self.max_action, log_prob
+        # instead of [-1,1] -> [self.min_action, self.max_action]
+        scaled_action = (tanh_action - 1) * (
+            (self._max_action - self._min_action) / 2
+        ) + self._max_action
 
-    @torch.no_grad()
-    def act(self, state: np.ndarray, device: str) -> np.ndarray:
+        return scaled_action, log_prob
+
+    @torch.no_grad()  # type: ignore
+    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         deterministic = not self.training
         state = torch.tensor(state, device=device, dtype=torch.float32)
-        action = self(state, deterministic=deterministic)[0].cpu().numpy()
+        action: np.ndarray = self(state, deterministic=deterministic)[0].cpu().numpy()
         return action
 
 
 class VectorizedCritic(nn.Module):
     def __init__(
-        self, state_dim: int, action_dim: int, hidden_dim: int, num_critics: int
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        num_critics: int,
     ):
         super().__init__()
         self.critic = nn.Sequential(
-            VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, hidden_dim, num_critics),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, hidden_dim, num_critics),
-            nn.ReLU(),
-            VectorizedLinear(hidden_dim, 1, num_critics),
+            *[
+                VectorizedLinear(state_dim + action_dim, hidden_dim, num_critics),
+                nn.ReLU(),
+                *[
+                    module
+                    for _ in range(hidden_layers)
+                    for module in (
+                        VectorizedLinear(hidden_dim, hidden_dim, num_critics),
+                        nn.ReLU(),
+                    )
+                ],
+                VectorizedLinear(hidden_dim, 1, num_critics),
+            ]
         )
+
         # init as in the EDAC paper
         for layer in self.critic[::2]:
             torch.nn.init.constant_(layer.bias, 0.1)
@@ -285,7 +324,7 @@ class VectorizedCritic(nn.Module):
 
         self.num_critics = num_critics
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    def forward(self, state: Tensor, action: Tensor) -> Tensor:
         # [..., batch_size, state_dim + action_dim]
         state_action = torch.cat([state, action], dim=-1)
         if state_action.dim() != 3:
@@ -333,10 +372,12 @@ class EDAC:
         self.log_alpha = torch.tensor(
             [0.0], dtype=torch.float32, device=self.device, requires_grad=True
         )
-        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_learning_rate)
+        self.alpha_optimizer = torch.optim.Adam(
+            [self.log_alpha], lr=alpha_learning_rate
+        )
         self.alpha = self.log_alpha.exp().detach()
 
-    def _alpha_loss(self, state: torch.Tensor) -> torch.Tensor:
+    def _alpha_loss(self, state: Tensor) -> Tensor:
         with torch.no_grad():
             action, action_log_prob = self.actor(state, need_log_prob=True)
 
@@ -344,7 +385,7 @@ class EDAC:
 
         return loss
 
-    def _actor_loss(self, state: torch.Tensor) -> Tuple[torch.Tensor, float, float]:
+    def _actor_loss(self, state: Tensor) -> Tuple[Tensor, float, float]:
         action, action_log_prob = self.actor(state, need_log_prob=True)
         q_value_dist = self.critic(state, action)
         assert q_value_dist.shape[0] == self.critic.num_critics
@@ -358,9 +399,7 @@ class EDAC:
 
         return loss, batch_entropy, q_value_std
 
-    def _critic_diversity_loss(
-        self, state: torch.Tensor, action: torch.Tensor
-    ) -> torch.Tensor:
+    def _critic_diversity_loss(self, state: Tensor, action: Tensor) -> Tensor:
         num_critics = self.critic.num_critics
         # almost exact copy from the original implementation, only style changes:
         # https://github.com/snu-mllab/EDAC/blob/198d5708701b531fd97a918a33152e1914ea14d7/lifelong_rl/trainers/q_learning/sac.py#L192
@@ -401,12 +440,12 @@ class EDAC:
 
     def _critic_loss(
         self,
-        state: torch.Tensor,
-        action: torch.Tensor,
-        reward: torch.Tensor,
-        next_state: torch.Tensor,
-        done: torch.Tensor,
-    ) -> torch.Tensor:
+        state: Tensor,
+        action: Tensor,
+        reward: Tensor,
+        next_state: Tensor,
+        done: Tensor,
+    ) -> Tensor:
         with torch.no_grad():
             next_action, next_action_log_prob = self.actor(
                 next_state, need_log_prob=True
@@ -426,7 +465,7 @@ class EDAC:
 
         return loss
 
-    def update(self, batch: TensorBatch) -> Dict[str, float]:
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
         state, action, reward, next_state, done = [arr.to(self.device) for arr in batch]
         # Usually updates are done in the following order: critic -> actor -> alpha
         # But we found that EDAC paper uses reverse (which gives better results)
@@ -456,8 +495,10 @@ class EDAC:
             soft_update(self.target_critic, self.critic, tau=self.tau)
             # for logging, Q-ensemble std estimate with the random actions:
             # a ~ U[-max_action, max_action]
-            max_action = self.actor.max_action
-            random_actions = -max_action + 2 * max_action * torch.rand_like(action)
+            random_actions = (
+                -self.actor._max_action
+                + 2 * self.actor._max_action * torch.rand_like(action)
+            )
 
             q_random_std = self.critic(state, random_actions).std(0).mean().item()
 
@@ -484,7 +525,7 @@ class EDAC:
         }
         return state
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.actor.load_state_dict(state_dict["actor"])
         self.critic.load_state_dict(state_dict["critic"])
         self.target_critic.load_state_dict(state_dict["target_critic"])
@@ -495,7 +536,7 @@ class EDAC:
         self.alpha = self.log_alpha.exp().detach()
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: Actor, device: str, n_episodes: int, seed: int
 ) -> np.ndarray:
@@ -506,7 +547,7 @@ def eval_actor(
         state, done = env.reset(), False
         episode_reward = 0.0
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, _ = env.step(action)
             episode_reward += reward
         episode_rewards.append(episode_reward)
@@ -515,7 +556,7 @@ def eval_actor(
     return np.array(episode_rewards)
 
 
-def return_reward_range(dataset, max_episode_steps):
+def return_reward_range(dataset: dict, max_episode_steps: int) -> tuple[float, float]:
     returns, lengths = [], []
     ep_ret, ep_len = 0.0, 0
     for r, d in zip(dataset["rewards"], dataset["terminals"]):
@@ -530,7 +571,9 @@ def return_reward_range(dataset, max_episode_steps):
     return min(returns), max(returns)
 
 
-def modify_reward(dataset, env_name, max_episode_steps=1000):
+def modify_reward(
+    dataset: dict, env_name: list[str], max_episode_steps: int = 1000
+) -> None:
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
         min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
         dataset["rewards"] /= max_ret - min_ret
@@ -539,100 +582,101 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
         dataset["rewards"] -= 1.0
 
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
-    set_seed(config.train_seed, deterministic_torch=config.deterministic_torch)
-    wandb_init(asdict(config))
+# @pyrallis.wrap()
+# def train(config: TrainConfig):
+#     set_seed(config.train_seed, deterministic_torch=config.deterministic_torch)
+#     wandb_init(asdict(config))
 
-    # data, evaluation, env setup
-    eval_env = wrap_env(gym.make(config.env_name))
-    state_dim = eval_env.observation_space.shape[0]
-    action_dim = eval_env.action_space.shape[0]
+#     # data, evaluation, env setup
+#     eval_env = wrap_env(gym.make(config.env_name))
+#     state_dim = eval_env.observation_space.shape[0]
+#     action_dim = eval_env.action_space.shape[0]
 
-    d4rl_dataset = d4rl.qlearning_dataset(eval_env)
+#     d4rl_dataset = d4rl.qlearning_dataset(eval_env)
 
-    if config.normalize_reward:
-        modify_reward(d4rl_dataset, config.env_name)
+#     if config.normalize_reward:
+#         modify_reward(d4rl_dataset, config.env_name)
 
-    buffer = ReplayBuffer(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        buffer_size=config.buffer_size,
-        device=config.device,
-    )
-    buffer.load_d4rl_dataset(d4rl_dataset)
+#     buffer = ReplayBuffer(
+#         state_dim=state_dim,
+#         action_dim=action_dim,
+#         buffer_size=config.buffer_size,
+#         device=config.device,
+#     )
+#     buffer.load_d4rl_dataset(d4rl_dataset)
 
-    # Actor & Critic setup
-    actor = Actor(state_dim, action_dim, config.hidden_dim, config.max_action)
-    actor.to(config.device)
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_learning_rate)
-    critic = VectorizedCritic(
-        state_dim, action_dim, config.hidden_dim, config.num_critics
-    )
-    critic.to(config.device)
-    critic_optimizer = torch.optim.Adam(
-        critic.parameters(), lr=config.critic_learning_rate
-    )
+#     # Actor & Critic setup
+#     actor = Actor(state_dim, action_dim, config.hidden_dim, config.max_action)
+#     actor.to(config.device)
+#     actor_optimizer = torch.optim.Adam(actor.parameters(),
+#                                        lr=config.actor_learning_rate)
+#     critic = VectorizedCritic(
+#         state_dim, action_dim, config.hidden_dim, config.num_critics
+#     )
+#     critic.to(config.device)
+#     critic_optimizer = torch.optim.Adam(
+#         critic.parameters(), lr=config.critic_learning_rate
+#     )
 
-    trainer = EDAC(
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        critic=critic,
-        critic_optimizer=critic_optimizer,
-        gamma=config.gamma,
-        tau=config.tau,
-        eta=config.eta,
-        alpha_learning_rate=config.alpha_learning_rate,
-        device=config.device,
-    )
-    # saving config to the checkpoint
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
+#     trainer = EDAC(
+#         actor=actor,
+#         actor_optimizer=actor_optimizer,
+#         critic=critic,
+#         critic_optimizer=critic_optimizer,
+#         gamma=config.gamma,
+#         tau=config.tau,
+#         eta=config.eta,
+#         alpha_learning_rate=config.alpha_learning_rate,
+#         device=config.device,
+#     )
+#     # saving config to the checkpoint
+#     if config.checkpoints_path is not None:
+#         print(f"Checkpoints path: {config.checkpoints_path}")
+#         os.makedirs(config.checkpoints_path, exist_ok=True)
+#         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
+#             pyrallis.dump(config, f)
 
-    total_updates = 0.0
-    for epoch in trange(config.num_epochs, desc="Training"):
-        # training
-        for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
-            batch = buffer.sample(config.batch_size)
-            update_info = trainer.update(batch)
+#     total_updates = 0.0
+#     for epoch in trange(config.num_epochs, desc="Training"):
+#         # training
+#         for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
+#             batch = buffer.sample(config.batch_size)
+#             update_info = trainer.train(batch)
 
-            if total_updates % config.log_every == 0:
-                wandb.log({"epoch": epoch, **update_info})
+#             if total_updates % config.log_every == 0:
+#                 wandb.log({"epoch": epoch, **update_info})
 
-            total_updates += 1
+#             total_updates += 1
 
-        # evaluation
-        if epoch % config.eval_every == 0 or epoch == config.num_epochs - 1:
-            eval_returns = eval_actor(
-                env=eval_env,
-                actor=actor,
-                n_episodes=config.eval_episodes,
-                seed=config.eval_seed,
-                device=config.device,
-            )
-            eval_log = {
-                "eval/reward_mean": np.mean(eval_returns),
-                "eval/reward_std": np.std(eval_returns),
-                "epoch": epoch,
-            }
-            if hasattr(eval_env, "get_normalized_score"):
-                normalized_score = eval_env.get_normalized_score(eval_returns) * 100.0
-                eval_log["eval/normalized_score_mean"] = np.mean(normalized_score)
-                eval_log["eval/normalized_score_std"] = np.std(normalized_score)
+#         # evaluation
+#         if epoch % config.eval_every == 0 or epoch == config.num_epochs - 1:
+#             eval_returns = eval_actor(
+#                 env=eval_env,
+#                 actor=actor,
+#                 n_episodes=config.eval_episodes,
+#                 seed=config.eval_seed,
+#                 device=config.device,
+#             )
+#             eval_log = {
+#                 "eval/reward_mean": np.mean(eval_returns),
+#                 "eval/reward_std": np.std(eval_returns),
+#                 "epoch": epoch,
+#             }
+#             if hasattr(eval_env, "get_normalized_score"):
+#                 normalized_score = eval_env.get_normalized_score(eval_returns) * 100.0
+#                 eval_log["eval/normalized_score_mean"] = np.mean(normalized_score)
+#                 eval_log["eval/normalized_score_std"] = np.std(normalized_score)
 
-            wandb.log(eval_log)
+#             wandb.log(eval_log)
 
-            if config.checkpoints_path is not None:
-                torch.save(
-                    trainer.state_dict(),
-                    os.path.join(config.checkpoints_path, f"{epoch}.pt"),
-                )
+#             if config.checkpoints_path is not None:
+#                 torch.save(
+#                     trainer.state_dict(),
+#                     os.path.join(config.checkpoints_path, f"{epoch}.pt"),
+#                 )
 
-    wandb.finish()
+#     wandb.finish()
 
 
-if __name__ == "__main__":
-    train()
+# if __name__ == "__main__":
+#     train()

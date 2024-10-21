@@ -68,13 +68,13 @@ class TrainConfig:
     group: str = "SPOT-D4RL"
     name: str = "SPOT"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
     for target_param, source_param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
@@ -85,8 +85,10 @@ def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.nda
     return mean, std
 
 
-def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
-    return (states - mean) / std
+def normalize_states(
+    states: np.ndarray, mean: np.ndarray, std: np.ndarray
+) -> np.ndarray:
+    return (states - mean) / std  # type: ignore
 
 
 def wrap_env(
@@ -96,7 +98,7 @@ def wrap_env(
     reward_scale: float = 1.0,
 ) -> gym.Env:
     # PEP 8: E731 do not assign a lambda expression, use a def
-    def normalize_state(state):
+    def normalize_state(state: np.ndarray) -> np.ndarray:
         return (
             state - state_mean
         ) / state_std  # epsilon should be already added in std.
@@ -129,7 +131,9 @@ class ReplayBuffer:
         self._actions = torch.zeros(
             (buffer_size, action_dim), dtype=torch.float32, device=device
         )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._rewards = torch.zeros(
+            (buffer_size, 1), dtype=torch.float32, device=device
+        )
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
@@ -193,7 +197,7 @@ def set_env_seed(env: Optional[gym.Env], seed: int):
 
 def set_seed(
     seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
-):
+) -> None:
     if env is not None:
         set_env_seed(env, seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -204,14 +208,14 @@ def set_seed(
 
 
 def wandb_init(config: dict) -> None:
-    wandb.init(
+    wandb.init(  # type: ignore
         config=config,
         project=config["project"],
         group=config["group"],
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save()  # type: ignore
 
 
 def is_goal_reached(reward: float, info: Dict) -> bool:
@@ -220,7 +224,7 @@ def is_goal_reached(reward: float, info: Dict) -> bool:
     return reward > 0  # Assuming that reaching target is a positive reward
 
 
-@torch.no_grad()
+@torch.no_grad()  # type: ignore
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -233,7 +237,7 @@ def eval_actor(
         episode_reward = 0.0
         goal_achieved = False
         while not done:
-            action = actor.act(state, device)
+            action = actor.act(state, device)  # type: ignore
             state, reward, done, env_infos = env.step(action)
             episode_reward += reward
             if not goal_achieved:
@@ -429,10 +433,10 @@ class Actor(nn.Module):
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.max_action * self.net(state)
 
-    @torch.no_grad()
+    @torch.no_grad()  # type: ignore
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
-        return self(state).cpu().data.numpy().flatten()
+        return self(state).cpu().data.numpy().flatten()  # type: ignore
 
 
 class Critic(nn.Module):
@@ -604,7 +608,9 @@ class SPOT:
         current_q2 = self.critic_2(state, action)
 
         # Compute critic loss
-        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(
+            current_q2, target_q
+        )
         log_dict["critic_loss"] = critic_loss.item()
         # Optimize the critic
         self.critic_1_optimizer.zero_grad()
@@ -665,7 +671,7 @@ class SPOT:
             "total_it": self.total_it,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         self.vae.load_state_dict(state_dict["vae"])
         self.vae_optimizer.load_state_dict(state_dict["vae_optimizer"])
 
