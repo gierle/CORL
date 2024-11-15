@@ -274,12 +274,8 @@ class Actor(nn.Module):
             log_prob = log_prob - \
                 torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)  # type: ignore
 
-        # instead of [-1,1] -> [self.min_action, self.max_action]
-        scaled_action = (tanh_action - 1) * (
-            (self._max_action - self._min_action) / 2
-        ) + self._max_action
 
-        return scaled_action, log_prob
+        return -torch.nn.functional.relu(action), log_prob
 
     @torch.no_grad()  # type: ignore
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
